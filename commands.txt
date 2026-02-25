@@ -1,0 +1,7 @@
+çalıştırmak için python da ilk önce virtual environment oluşturun
+
+1. python -m venv .venv (venv oluşturmak için)
+2. .venv\Scripts\activate (venv aktifleştirmek için)
+3. pip install -r requirements.txt (requirements.txt dosyasının içeriklerini yüklemek için)
+4. python backend/app.py (uygulamayı çalıştırmak için)
+daha model hazır değil proje başlangıcı.

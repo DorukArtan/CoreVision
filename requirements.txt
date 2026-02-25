@@ -1,0 +1,18 @@
+# Multi-Task Vehicle Recognition Model
+# Python 3.9+
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Web Framework
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# Image Processing
+Pillow>=9.0.0
+numpy>=1.24.0
+
+# OCR
+easyocr>=1.7.0

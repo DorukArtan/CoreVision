@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vehicle Recognition AI — Model Classification & Plate Reader</title>
+    <meta name="description" content="Multi-task AI for vehicle model classification and license plate recognition. Upload a car photo to identify the model and read the plate.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="bg-grid"></div>
+    <div class="bg-glow glow-1"></div>
+    <div class="bg-glow glow-2"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">🚗</span>
+                <div>
+                    <h1 class="logo-title">VehicleAI</h1>
+                    <p class="logo-subtitle">Multi-Task Recognition Network</p>
+                </div>
+            </div>
+            <div class="header-badge">
+                <span class="badge-dot"></span>
+                <span id="statusText">Ready</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Upload Section -->
+        <section class="upload-section" id="uploadSection">
+            <div class="upload-card glass-card">
+                <div class="upload-zone" id="uploadZone">
+                    <div class="upload-icon-container">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M12 16V4m0 0L8 8m4-4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h2 class="upload-title">Upload Vehicle Image</h2>
+                    <p class="upload-desc">Drag & drop a car photo here, or click to browse</p>
+                    <p class="upload-formats">Supports JPG, PNG, WEBP — Max 10MB</p>
+                    <input type="file" id="fileInput" accept="image/*" hidden>
+                </div>
+
+                <!-- Image Preview -->
+                <div class="preview-container" id="previewContainer" style="display: none;">
+                    <img id="previewImage" class="preview-image" alt="Uploaded car image">
+                    <button class="btn-remove" id="btnRemove" title="Remove image">✕</button>
+                </div>
+
+                <!-- Analyze Button -->
+                <button class="btn-analyze" id="btnAnalyze" style="display: none;">
+                    <span class="btn-text">Analyze Vehicle</span>
+                    <span class="btn-loader" style="display: none;">
+                        <span class="spinner"></span> Processing...
+                    </span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <!-- Annotated Image -->
+            <div class="result-card glass-card image-result">
+                <h3 class="result-card-title">
+                    <span class="result-icon">🖼️</span> Detection Result
+                </h3>
+                <div class="annotated-container">
+                    <img id="annotatedImage" class="annotated-image" alt="Annotated result">
+                </div>
+            </div>
+
+            <!-- Vehicle Model Result -->
+            <div class="result-card glass-card">
+                <h3 class="result-card-title">
+                    <span class="result-icon">🚗</span> Vehicle Model
+                </h3>
+                <div class="result-main" id="vehicleResult">
+                    <span class="result-value" id="vehicleModel">—</span>
+                    <div class="confidence-bar-container">
+                        <div class="confidence-bar" id="vehicleConfBar"></div>
+                    </div>
+                    <span class="confidence-text" id="vehicleConf">0%</span>
+                </div>
+
+                <!-- Top 5 Predictions -->
+                <div class="top5-container" id="top5Container">
+                    <h4 class="top5-title">Top 5 Predictions</h4>
+                    <ul class="top5-list" id="top5List"></ul>
+                </div>
+            </div>
+
+            <!-- License Plate Result -->
+            <div class="result-card glass-card">
+                <h3 class="result-card-title">
+                    <span class="result-icon">🔤</span> License Plate
+                </h3>
+                <div class="plate-result">
+                    <div class="plate-display" id="plateDisplay">
+                        <span class="plate-text" id="plateText">—</span>
+                    </div>
+                    <div class="plate-details">
+                        <div class="detail-item">
+                            <span class="detail-label">Confidence</span>
+                            <span class="detail-value" id="plateConf">—</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Bbox</span>
+                            <span class="detail-value" id="plateBbox">—</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- New Analysis Button -->
+            <button class="btn-new" id="btnNew">
+                ↺ New Analysis
+            </button>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>Multi-Task AI Network — Vehicle Model Classification & License Plate Recognition</p>
+        <p class="footer-sub">Built with PyTorch • EfficientNet-B0 • EasyOCR • FastAPI</p>
+    </footer>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

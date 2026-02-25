@@ -1,0 +1,48 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ---- Virtual Environment ----
+.venv/
+venv/
+ENV/
+
+# ---- Model Weights (too large for git) ----
+weights/*.pth
+weights/*.pt
+weights/*.ckpt
+*.onnx
+
+# ---- Datasets (too large for git) ----
+data/
+*.zip
+*.tar.gz
+
+# ---- EasyOCR downloaded models ----
+~/.EasyOCR/
+
+# ---- IDE / Editor ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS Files ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs & Temp ----
+*.log
+tmp/
+temp/
+
+# ---- Jupyter (if used) ----
+.ipynb_checkpoints/
