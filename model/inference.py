@@ -173,7 +173,10 @@ class VehicleInferencePipeline:
     
     def _draw_annotations(self, image, result):
         """Draw bounding box and labels on the image."""
-        img = image.copy()
+        # Convert to RGBA for alpha compositing
+        img = image.copy().convert('RGBA')
+        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        draw_overlay = ImageDraw.Draw(overlay)
         draw = ImageDraw.Draw(img)
         
         # Try to load a nice font, fall back to default
@@ -193,10 +196,9 @@ class VehicleInferencePipeline:
             plate_text = result.get('plate_text', '')
             if plate_text:
                 label = f"Plate: {plate_text}"
-                # Background for text
-                bbox_text = draw.textbbox((x1, y1 - 20), label, font=font)
-                draw.rectangle(bbox_text, fill='#00FF00')
-                draw.text((x1, y1 - 20), label, fill='black', font=font)
+                bbox_text = draw.textbbox((x1, y1 - 22), label, font=font)
+                draw_overlay.rectangle(bbox_text, fill=(0, 200, 0, 200))
+                draw_overlay.text((x1, y1 - 22), label, fill=(0, 0, 0, 255), font=font)
         
         # Draw vehicle model label at top
         vehicle_model = result.get('vehicle_model', '')
@@ -204,9 +206,12 @@ class VehicleInferencePipeline:
         if vehicle_model:
             label = f"{vehicle_model} ({confidence:.1%})"
             bbox_text = draw.textbbox((10, 10), label, font=font)
-            draw.rectangle(bbox_text, fill='rgba(0,0,0,180)')
-            draw.text((10, 10), label, fill='white', font=font)
+            # Semi-transparent dark background
+            draw_overlay.rectangle(bbox_text, fill=(0, 0, 0, 180))
+            draw_overlay.text((10, 10), label, fill=(255, 255, 255, 255), font=font)
         
+        # Composite overlay and convert back to RGB
+        img = Image.alpha_composite(img, overlay).convert('RGB')
         return img
 
 

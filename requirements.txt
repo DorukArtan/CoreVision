@@ -13,6 +13,8 @@ python-multipart>=0.0.6
 # Image Processing
 Pillow>=9.0.0
 numpy>=1.24.0
+scipy>=1.10.0
+opencv-python>=4.7.0
 
 # OCR
 easyocr>=1.7.0

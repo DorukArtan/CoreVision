@@ -128,6 +128,51 @@ class PlateOCRHead(nn.Module):
             )
         return self._reader
     
+    def _preprocess_plate(self, img_np):
+        """
+        Preprocess a cropped plate image for better OCR accuracy.
+        
+        Steps:
+        1. Convert to grayscale
+        2. Apply CLAHE (adaptive contrast enhancement)
+        3. Upscale 2x for small plates
+        4. Bilateral filter to reduce noise while keeping edges
+        
+        Returns:
+            Preprocessed numpy array
+        """
+        try:
+            import cv2
+        except ImportError:
+            return img_np  # Fallback: no preprocessing
+        
+        # Ensure uint8
+        if img_np.dtype != np.uint8:
+            img_np = (img_np * 255).astype(np.uint8)
+        
+        # Convert to grayscale
+        if len(img_np.shape) == 3 and img_np.shape[2] == 3:
+            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_np
+        
+        # Upscale small plates (height < 50px gets 2x scale)
+        h, w = gray.shape[:2]
+        if h < 50:
+            scale = max(2, 50 // h)
+            gray = cv2.resize(gray, (w * scale, h * scale),
+                              interpolation=cv2.INTER_CUBIC)
+        
+        # CLAHE — adaptive contrast enhancement
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        
+        # Bilateral filter — smooth noise, keep edges
+        filtered = cv2.bilateralFilter(enhanced, d=5,
+                                        sigmaColor=50, sigmaSpace=50)
+        
+        return filtered
+    
     def forward(self, plate_images):
         """
         Args:
@@ -149,8 +194,11 @@ class PlateOCRHead(nn.Module):
             else:
                 img_np = img
             
+            # Preprocess for better OCR
+            processed = self._preprocess_plate(img_np)
+            
             # Run EasyOCR
-            detections = self.reader.readtext(img_np)
+            detections = self.reader.readtext(processed)
             
             if detections:
                 # Concatenate all detected text segments
