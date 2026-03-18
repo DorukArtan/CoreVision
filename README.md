@@ -1,103 +1,74 @@
-# Multi-Task AI Network for Vehicle Model Classification & License Plate Recognition
+# CoreVision v2 — Video-Based Vehicle Recognition
 
-A single end-to-end multi-task neural network that performs **vehicle model classification** and **license plate recognition** from a single image, served through a web interface.
+Detects **car model/brand** and **license plate text + country** from uploaded videos or images. Entirely self-trained models, no external AI APIs.
 
 ## Architecture
 
 ```
-Input Image (224×224)
-    │
-    ▼
-┌──────────────────────────┐
-│  Shared Backbone         │
-│  (EfficientNet-B0)       │
-│  Pretrained on ImageNet  │
-└────────┬─────────────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌──────────┐
-│ Global │ │ Feature  │
-│ AvgPool│ │ Map 7×7  │
-└───┬────┘ └────┬─────┘
-    │           │
-    ▼           ▼
-┌────────┐ ┌──────────┐     ┌──────────┐
-│Vehicle │ │  Plate   │────►│  Plate   │
-│ClassHd │ │  DetHd   │crop │  OCR Hd  │
-└───┬────┘ └────┬─────┘     └────┬─────┘
-    │           │                │
-    ▼           ▼                ▼
- Car Model   BBox [x,y,w,h]   Plate Text
- (196 cls)                    (EasyOCR)
-```
-
-## Quick Start
-
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run the Web App
-```bash
-python backend/app.py
-```
-Open **http://localhost:8000** in your browser.
-
-### 3. Train the Model (Optional)
-Place your datasets in:
-- `data/stanford_cars/train/` and `data/stanford_cars/test/` (vehicle images organized by class)
-- `data/turkish_plates/images/train/` and `data/turkish_plates/labels/train/` (YOLO format)
-
-```bash
-python -m training.train
+Video Upload → Frame Extraction (OpenCV)
+    ↓
+YOLOv8-nano (fine-tuned) → Vehicle Crop + Plate Crop
+    ↓                           ↓
+EfficientNetV2-S          PaddleOCR
+(~1,716 car models)       (80+ languages)
+    ↓                           ↓
+Car Make/Model            Plate Text → Country Code
 ```
 
 ## Project Structure
 ```
 ├── model/
-│   ├── backbone.py        # EfficientNet-B0 shared feature extractor
-│   ├── heads.py           # Classification, Detection, OCR heads
-│   ├── multitask_net.py   # Combined multi-task model
-│   ├── losses.py          # Uncertainty-weighted multi-task loss
-│   └── inference.py       # Single-image inference pipeline
-├── training/
-│   ├── dataset.py         # Dataset loaders (Stanford Cars, Turkish Plates)
-│   ├── train.py           # 3-phase training loop
-│   └── config.py          # Hyperparameters for RTX 4060 Ti
-├── backend/
-│   └── app.py             # FastAPI server
-├── frontend/
-│   ├── index.html         # Upload & results UI
-│   ├── style.css          # Dark glassmorphism theme
-│   └── script.js          # Frontend logic
-├── weights/               # Model checkpoints
-└── requirements.txt
+│   ├── video_processor.py    # Frame extraction from video
+│   ├── detector.py           # YOLOv8 vehicle + plate detection
+│   ├── car_classifier.py     # EfficientNetV2-S car model classification
+│   ├── plate_ocr.py          # PaddleOCR multi-language plate reader
+│   ├── country_identifier.py # Country code matching (60+ countries)
+│   └── pipeline.py           # End-to-end orchestrator
+├── notebooks/
+│   ├── train_classifier.ipynb  # ← Colab: train car model classifier
+│   └── train_detector.ipynb    # ← Colab: train plate detector
+├── backend/app.py              # FastAPI server
+├── frontend/                   # Web UI
+├── weights/                    # Trained model weights (download from Colab)
+│   ├── car_classifier.pth
+│   └── plate_detector.pt
+└── data/
+    └── compcars_classes.txt    # Car class names (download from Colab)
 ```
 
-## Training Strategy
+## Training on Google Colab
 
-| Phase | Description | Backbone | Epochs |
-|-------|-------------|----------|--------|
-| 1 | Classification head warmup | Frozen | 10 |
-| 2 | Detection head warmup | Frozen | 10 |
-| 3 | Joint fine-tuning (alternating batches) | Unfrozen | 20 |
+### Step 1 — Train the Plate Detector (~1-2 hrs)
+1. Open `notebooks/train_detector.ipynb` in [Google Colab](https://colab.research.google.com)
+2. Set runtime to **GPU → T4**
+3. Get a [free Roboflow API key](https://app.roboflow.com) and paste it in Cell 3
+4. Run all cells
+5. Download `plate_detector.pt` → place in `weights/`
 
-The model uses **uncertainty-weighted multi-task loss** (Kendall et al., 2018) to automatically balance task contributions during joint training.
+### Step 2 — Train the Car Classifier (~3-5 hrs)
+1. Open `notebooks/train_classifier.ipynb` in Google Colab
+2. Set runtime to **GPU → T4**
+3. Upload your CompCars dataset zip to Google Drive → `MyDrive/CoreVision/data/`
+4. Run all cells
+5. Download `car_classifier.pth` and `compcars_classes.txt` → place in `weights/` and `data/`
 
-## Key Techniques
-- **Multi-task learning** with shared backbone + task-specific heads
-- **Disjoint dataset training** via alternating batches with masked losses
-- **Uncertainty weighting** for automatic loss balancing
-- **Differential learning rates** (1e-5 backbone, 3e-4 heads)
-- **Mixed precision training** (AMP) for RTX 4060 Ti optimization
-- **GIoU loss** for better bounding box regression
-- **EasyOCR** for plate text reading (no OCR training data needed)
+## Running the App
 
-## Datasets
-- **Vehicle Classification**: Stanford Cars (196 classes, ~16k images)
-- **Plate Detection**: Turkish License Plate Dataset (YOLO format, ~3GB)
+```bash
+pip install -r requirements.txt
+python backend/app.py
+```
+
+Open **http://localhost:8000**
+
+## Key Components
+
+| Component | Model | Dataset | Accuracy Target |
+|-----------|-------|---------|----------------|
+| Plate Detection | YOLOv8-nano | Roboflow (multi-country) | 90%+ mAP |
+| Car Classification | EfficientNetV2-S | CompCars (~1,716 models) | 90%+ Top-5 |
+| Plate OCR | PaddleOCR | Pretrained (80+ langs) | 90-95% |
+| Country ID | Regex + lookup | Rule-based | 85%+ |
 
 ## Tech Stack
-PyTorch • EfficientNet-B0 • EasyOCR • FastAPI • Vanilla JS
+PyTorch • EfficientNetV2 • YOLOv8 • PaddleOCR • FastAPI • OpenCV

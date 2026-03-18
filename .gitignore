@@ -46,3 +46,5 @@ temp/
 
 # ---- Jupyter (if used) ----
 .ipynb_checkpoints/
+
+.venv-311

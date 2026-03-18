@@ -1,20 +1,27 @@
-# Multi-Task Vehicle Recognition Model
-# Python 3.9+
+# CoreVision v2 Dependencies
+# Install with: pip install -r requirements.txt
 
-# Deep Learning
-torch>=2.0.0
-torchvision>=0.15.0
+# ── Deep Learning ──────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+timm>=0.9.0                # EfficientNetV2-S backbone
 
-# Web Framework
-fastapi>=0.100.0
-uvicorn>=0.23.0
-python-multipart>=0.0.6
+# ── Detection ─────────────────────────────────
+ultralytics>=8.0.0         # YOLOv8
 
-# Image Processing
-Pillow>=9.0.0
+# ── OCR ───────────────────────────────────────
+paddlepaddle>=2.6.0        # PaddleOCR backend
+paddleocr>=2.7.0           # Multi-language OCR
+
+# ── Video & Image Processing ──────────────────
+opencv-python>=4.8.0
+Pillow>=10.0.0
 numpy>=1.24.0
-scipy>=1.10.0
-opencv-python>=4.7.0
 
-# OCR
-easyocr>=1.7.0
+# ── Backend ───────────────────────────────────
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6    # Required for file uploads
+
+# ── Optional: EasyOCR fallback ────────────────
+# easyocr>=1.7.0           # Uncomment if PaddleOCR unavailable
