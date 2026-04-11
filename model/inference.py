@@ -15,8 +15,7 @@ from torchvision import transforms
 from model.multitask_net import MultiTaskNet
 
 
-# Stanford Cars class names (subset — full list would be loaded from file)
-# This is a representative subset; the full 196 classes would be loaded from a labels file
+# VMMRdb class names — loaded from file or passed in
 DEFAULT_CLASS_NAMES = None  # Will be loaded from file or passed in
 
 
@@ -30,7 +29,7 @@ class VehicleInferencePipeline:
         print(result['vehicle_model'], result['plate_text'])
     """
     
-    def __init__(self, model_path=None, num_classes=196, class_names=None, device=None):
+    def __init__(self, model_path=None, num_classes=100, class_names=None, device=None):
         """
         Args:
             model_path: Path to saved model weights (None for random init)
@@ -220,7 +219,7 @@ if __name__ == "__main__":
     print("=" * 50)
     
     # Test with random weights (no trained model)
-    pipeline = VehicleInferencePipeline(model_path=None, num_classes=196)
+    pipeline = VehicleInferencePipeline(model_path=None, num_classes=100)
     
     # Create a dummy test image
     dummy_img = Image.new('RGB', (640, 480), color='gray')

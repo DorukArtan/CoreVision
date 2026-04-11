@@ -12,14 +12,15 @@ print("Multi-Task Model Test")
 print("=" * 50)
 
 # Create model (no pretrained weights to save download time)
-model = MultiTaskNet(196, pretrained_backbone=False)
+TEST_NUM_CLASSES = 100  # Placeholder for testing (real count is auto-discovered)
+model = MultiTaskNet(TEST_NUM_CLASSES, pretrained_backbone=False)
 x = torch.randn(2, 3, 224, 224)
 
 # Test classification
 out = model(x, task='classify')
 cls_shape = out['class_logits'].shape
 print(f"Classification: {cls_shape}")
-assert cls_shape == (2, 196), f"Expected (2, 196), got {cls_shape}"
+assert cls_shape == (2, TEST_NUM_CLASSES), f"Expected (2, {TEST_NUM_CLASSES}), got {cls_shape}"
 
 # Test detection
 out = model(x, task='detect')
@@ -36,8 +37,8 @@ print(f"All tasks: cls={out['class_logits'].shape}, bbox={out['bbox'].shape}")
 loss_fn = MultiTaskLoss()
 
 # Classification loss only
-preds_cls = {'class_logits': torch.randn(2, 196)}
-targets_cls = {'class_labels': torch.randint(0, 196, (2,))}
+preds_cls = {'class_logits': torch.randn(2, TEST_NUM_CLASSES)}
+targets_cls = {'class_labels': torch.randint(0, TEST_NUM_CLASSES, (2,))}
 total, details = loss_fn(preds_cls, targets_cls, task='classify')
 print(f"\nClassification loss: {total.item():.4f}")
 

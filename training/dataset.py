@@ -2,7 +2,7 @@
 dataset.py - Dataset Classes for Multi-Task Training
 
 Two separate datasets for the disjoint training setup:
-1. StanfordCarsDataset - Vehicle model classification (Kaggle .mat annotations)
+1. VMMRdbDataset  - Vehicle make/model classification (folder-per-class)
 2. TurkishPlateDataset - License plate detection (YOLO format, flat structure)
 """
 
@@ -15,41 +15,46 @@ from torchvision import transforms
 import numpy as np
 
 
-class StanfordCarsDataset(Dataset):
+class VMMRdbDataset(Dataset):
     """
-    Stanford Cars dataset for vehicle model classification.
-    
-    Supports the Kaggle flat structure with .mat annotation files:
-        stanford_cars/
-        ├── cars_train/
-        │   └── cars_train/   (flat numbered images: 00001.jpg ...)
-        ├── cars_test/
-        │   └── cars_test/    (flat numbered images)
-        └── car_devkit/
-            └── devkit/
-                ├── cars_train_annos.mat
-                ├── cars_test_annos.mat
-                └── cars_meta.mat
+    VMMRdb (Vehicle Make & Model Recognition) dataset.
+
+    Expects a folder-per-class structure:
+        vmmrdb/
+        ├── make_model_year/
+        │   ├── image1.jpg
+        │   └── ...
+        └── make_model_year/
+            └── ...
+
+    Each subdirectory under root_dir is one class.
+    Classes with fewer than ``min_samples`` images are dropped.
+    A deterministic 80/20 train/val split is performed on the
+    filtered dataset.
     """
-    
-    def __init__(self, root_dir, split='train', input_size=224):
+
+    def __init__(self, root_dir, split='train', input_size=224,
+                 min_samples=5, val_ratio=0.2, seed=42):
         """
         Args:
-            root_dir: Path to stanford_cars directory
-            split: 'train' or 'test'
-            input_size: Image resize dimension
+            root_dir:    Path to the VMMRdb root directory
+            split:       'train' or 'test' / 'val'
+            input_size:  Image resize dimension
+            min_samples: Minimum images a class must have to be kept
+            val_ratio:   Fraction held out for validation
+            seed:        Random seed for reproducible split
         """
         self.root_dir = root_dir
         self.input_size = input_size
         self.split = split
-        
-        # Build image list and class mapping
+
         self.images = []
         self.labels = []
         self.class_names = []
-        
-        self._load_dataset(split)
-        
+        self.num_classes = 0
+
+        self._load_dataset(split, min_samples, val_ratio, seed)
+
         # Augmentation transforms
         if split == 'train':
             self.transform = transforms.Compose([
@@ -72,111 +77,79 @@ class StanfordCarsDataset(Dataset):
                     std=[0.229, 0.224, 0.225]
                 )
             ])
-    
-    def _load_dataset(self, split):
-        """Load images and labels from .mat annotation file or class folders.
-        
-        Note: Stanford Cars test annotations don't include class labels,
-        so we split the train set 80/20 for train/val instead.
-        """
-        devkit_dir = os.path.join(self.root_dir, 'car_devkit', 'devkit')
-        train_mat = os.path.join(devkit_dir, 'cars_train_annos.mat')
-        meta_file = os.path.join(devkit_dir, 'cars_meta.mat')
-        
-        if os.path.exists(train_mat):
-            self._load_from_mat(split, train_mat, meta_file)
-        else:
-            # Fallback: class subdirectory structure
-            self._load_from_class_dirs(split)
-    
-    def _load_from_mat(self, split, train_mat_file, meta_file,
-                       val_ratio=0.2, seed=42):
-        """Load from .mat annotation files (Kaggle/Stanford format).
-        
-        Since the test set has no class labels, we split the train
-        annotations into train (80%) and val (20%).
-        """
-        try:
-            from scipy.io import loadmat
-        except ImportError:
-            print("WARNING: scipy not installed. Run: pip install scipy")
-            print("Falling back to class directory structure...")
-            self._load_from_class_dirs(split)
+
+    def _load_dataset(self, split, min_samples, val_ratio, seed):
+        """Scan class subdirectories, filter, and split."""
+        if not os.path.exists(self.root_dir):
+            print(f"  WARNING: Dataset directory not found: {self.root_dir}")
             return
-        
-        # Load class names
-        if os.path.exists(meta_file):
-            meta = loadmat(meta_file)
-            self.class_names = [str(name[0]) for name in meta['class_names'][0]]
-        
-        # Find train image directory (handles nested: cars_train/cars_train/)
-        img_dir = os.path.join(self.root_dir, 'cars_train')
-        nested_dir = os.path.join(img_dir, 'cars_train')
-        if os.path.exists(nested_dir):
-            img_dir = nested_dir
-        
-        # Load ALL train annotations
-        annos = loadmat(train_mat_file)
-        annotations = annos['annotations'][0]
-        
+
+        # Discover class directories
+        all_class_dirs = sorted([
+            d for d in os.listdir(self.root_dir)
+            if os.path.isdir(os.path.join(self.root_dir, d))
+            and not d.startswith('_')
+        ])
+
+        # Gather images per class and filter by min_samples
+        class_images = {}  # class_name -> [image_paths]
+        for class_name in all_class_dirs:
+            class_path = os.path.join(self.root_dir, class_name)
+            imgs = [
+                os.path.join(class_path, f)
+                for f in os.listdir(class_path)
+                if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
+            ]
+            if len(imgs) >= min_samples:
+                class_images[class_name] = sorted(imgs)
+
+        self.class_names = sorted(class_images.keys())
+        self.num_classes = len(self.class_names)
+        class_to_idx = {name: idx for idx, name in enumerate(self.class_names)}
+
+        # Build split
+        rng = random.Random(seed)
         all_images = []
         all_labels = []
-        
-        for anno in annotations:
-            fname = str(anno['fname'][0])
-            img_path = os.path.join(img_dir, fname)
-            
-            if os.path.exists(img_path):
-                class_id = int(anno['class'][0][0]) - 1
-                all_images.append(img_path)
-                all_labels.append(class_id)
-        
-        # Split into train/val deterministically
-        n = len(all_images)
-        indices = list(range(n))
-        rng = random.Random(seed)
-        rng.shuffle(indices)
-        split_idx = int(n * (1 - val_ratio))
-        
-        if split == 'train':
-            selected = indices[:split_idx]
-        else:  # 'test' or 'val'
-            selected = indices[split_idx:]
-        
-        self.images = [all_images[i] for i in selected]
-        self.labels = [all_labels[i] for i in selected]
-        
-        print(f"  Stanford Cars ({split}): {len(self.images)} images, "
-              f"{len(self.class_names)} classes (from {n} total, "
+
+        for class_name in self.class_names:
+            imgs = class_images[class_name]
+            indices = list(range(len(imgs)))
+            rng.shuffle(indices)
+            split_idx = int(len(imgs) * (1 - val_ratio))
+            # Ensure at least 1 in each split
+            split_idx = max(1, min(split_idx, len(imgs) - 1))
+
+            if split == 'train':
+                selected = indices[:split_idx]
+            else:  # 'test' or 'val'
+                selected = indices[split_idx:]
+
+            label = class_to_idx[class_name]
+            for i in selected:
+                all_images.append(imgs[i])
+                all_labels.append(label)
+
+        self.images = all_images
+        self.labels = all_labels
+
+        total = sum(len(v) for v in class_images.values())
+        print(f"  VMMRdb ({split}): {len(self.images)} images, "
+              f"{self.num_classes} classes "
+              f"(from {len(all_class_dirs)} dirs, "
+              f"filtered ≥{min_samples} samples, "
               f"{val_ratio:.0%} val split)")
-    
-    def _load_from_class_dirs(self, split):
-        """Fallback: load from class subdirectory structure."""
-        split_dir = os.path.join(self.root_dir, split)
-        if not os.path.exists(split_dir):
-            print(f"  WARNING: Directory not found: {split_dir}")
-            return
-        
-        class_dirs = sorted([
-            d for d in os.listdir(split_dir)
-            if os.path.isdir(os.path.join(split_dir, d))
-        ])
-        
-        self.class_names = class_dirs
-        
-        for class_idx, class_name in enumerate(class_dirs):
-            class_path = os.path.join(split_dir, class_name)
-            for img_name in os.listdir(class_path):
-                if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
-                    self.images.append(os.path.join(class_path, img_name))
-                    self.labels.append(class_idx)
-        
-        print(f"  Stanford Cars ({split}): {len(self.images)} images, "
-              f"{len(self.class_names)} classes loaded from directories")
-    
+
+    def save_class_names(self, path):
+        """Write class names to a text file (one per line)."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(self.class_names))
+        print(f"  Saved {len(self.class_names)} class names to {path}")
+
     def __len__(self):
         return len(self.images)
-    
+
     def __getitem__(self, idx):
         """
         Returns:
@@ -186,9 +159,9 @@ class StanfordCarsDataset(Dataset):
         img_path = self.images[idx]
         image = Image.open(img_path).convert('RGB')
         label = self.labels[idx]
-        
+
         image = self.transform(image)
-        
+
         return {
             'image': image,
             'class_label': torch.tensor(label, dtype=torch.long),
@@ -386,13 +359,23 @@ def create_dataloaders(config):
     """
     from torch.utils.data import DataLoader
     
-    # Vehicle classification dataset
-    vehicle_train = StanfordCarsDataset(
-        config.VEHICLE_DATASET_DIR, split='train', input_size=config.INPUT_SIZE
+    # Vehicle classification dataset (VMMRdb)
+    min_samples = getattr(config, 'MIN_SAMPLES_PER_CLASS', 5)
+    vehicle_train = VMMRdbDataset(
+        config.VEHICLE_DATASET_DIR, split='train',
+        input_size=config.INPUT_SIZE, min_samples=min_samples
     )
-    vehicle_val = StanfordCarsDataset(
-        config.VEHICLE_DATASET_DIR, split='test', input_size=config.INPUT_SIZE
+    vehicle_val = VMMRdbDataset(
+        config.VEHICLE_DATASET_DIR, split='test',
+        input_size=config.INPUT_SIZE, min_samples=min_samples
     )
+    
+    # Update config with discovered class count
+    if vehicle_train.num_classes > 0:
+        config.NUM_VEHICLE_CLASSES = vehicle_train.num_classes
+        # Save class names for inference
+        class_names_path = os.path.join(config.PROJECT_ROOT, 'data', 'vmmrdb_classes.txt')
+        vehicle_train.save_class_names(class_names_path)
     
     # Plate detection dataset (auto-splits into train/val)
     plate_train = TurkishPlateDataset(
@@ -426,6 +409,7 @@ def create_dataloaders(config):
     
     print(f"Vehicle train: {len(vehicle_train)} images, {len(vehicle_train_loader)} batches")
     print(f"Vehicle val:   {len(vehicle_val)} images")
+    print(f"Vehicle classes: {vehicle_train.num_classes}")
     print(f"Plate train:   {len(plate_train)} images, {len(plate_train_loader)} batches")
     print(f"Plate val:     {len(plate_val)} images")
     

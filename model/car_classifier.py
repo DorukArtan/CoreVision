@@ -1,7 +1,7 @@
 """
 car_classifier.py - EfficientNetV2-S Car Model Classification
 
-Fine-tuned on CompCars dataset (~1,716 car models).
+Fine-tuned on VMMRdb dataset (Vehicle Make & Model Recognition).
 Training is done on Google Colab (see notebooks/train_classifier.ipynb).
 This module loads the trained weights for inference.
 """
@@ -22,24 +22,25 @@ class CarClassifier:
     """
     Classify car make/model from a cropped vehicle image.
     
-    Uses EfficientNetV2-S as backbone, fine-tuned on CompCars.
+    Uses EfficientNetV2-S as backbone, fine-tuned on VMMRdb.
     
     Usage:
         classifier = CarClassifier(
             weights_path='weights/car_classifier.pth',
-            class_names_path='data/compcars_classes.txt'
+            class_names_path='data/vmmrdb_classes.txt'
         )
         result = classifier.predict(vehicle_crop)
         print(result['make_model'], result['confidence'])
     """
     
     def __init__(self, weights_path=None, class_names_path=None,
-                 num_classes=1716, device=None):
+                 num_classes=100, hidden_dim=512, device=None):
         """
         Args:
             weights_path: Path to trained model weights (.pth)
             class_names_path: Path to text file with class names (one per line)
             num_classes: Number of car model classes
+            hidden_dim: Hidden layer dimension (512 for model classifier, 256 for brand)
             device: 'cuda', 'cpu', or None (auto-detect)
         """
         if timm is None:
@@ -47,12 +48,17 @@ class CarClassifier:
         
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.num_classes = num_classes
+        self.hidden_dim = hidden_dim
         
         # Load class names
         self.class_names = self._load_class_names(class_names_path)
         
+        # Auto-detect hidden_dim from checkpoint if available
+        if weights_path is not None:
+            self.hidden_dim = self._detect_hidden_dim(weights_path, hidden_dim)
+        
         # Build model
-        self.model = self._build_model(num_classes)
+        self.model = self._build_model(num_classes, self.hidden_dim)
         
         # Load trained weights
         if weights_path is not None:
@@ -73,7 +79,7 @@ class CarClassifier:
             )
         ])
     
-    def _build_model(self, num_classes):
+    def _build_model(self, num_classes, hidden_dim=512):
         """
         Build EfficientNetV2-S with custom classification head.
         
@@ -81,8 +87,8 @@ class CarClassifier:
             EfficientNetV2-S (pretrained backbone)
             → Global Average Pooling
             → Dropout(0.3)
-            → FC(1280 → 512) → BN → ReLU → Dropout(0.2)
-            → FC(512 → num_classes)
+            → FC(1280 → hidden_dim) → BN → ReLU → Dropout(0.2)
+            → FC(hidden_dim → num_classes)
         """
         # Load EfficientNetV2-S with pretrained weights (ImageNet)
         backbone = timm.create_model(
@@ -96,14 +102,30 @@ class CarClassifier:
         model = nn.Sequential(
             backbone,
             nn.Dropout(0.3),
-            nn.Linear(feature_dim, 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(feature_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.2),
-            nn.Linear(512, num_classes)
+            nn.Linear(hidden_dim, num_classes)
         )
         
         return model
+    
+    def _detect_hidden_dim(self, weights_path, default=512):
+        """Auto-detect hidden layer dimension from checkpoint weights."""
+        import os
+        if not os.path.exists(weights_path):
+            return default
+        try:
+            checkpoint = torch.load(weights_path, map_location='cpu')
+            state = checkpoint.get('model_state_dict', checkpoint)
+            # The hidden FC layer is at index 2 (after backbone + dropout)
+            for key in state:
+                if key in ('2.weight', 'module.2.weight'):
+                    return state[key].shape[0]  # out_features = hidden_dim
+            return default
+        except Exception:
+            return default
     
     def _load_weights(self, weights_path):
         """Load trained weights from checkpoint."""
@@ -193,7 +215,7 @@ if __name__ == "__main__":
     print("=" * 50)
     
     if timm is not None:
-        classifier = CarClassifier(weights_path=None, num_classes=1716)
+        classifier = CarClassifier(weights_path=None, num_classes=100)
         dummy = Image.new('RGB', (224, 224), color='gray')
         result = classifier.predict(dummy)
         print(f"Prediction: {result['make_model']} ({result['confidence']:.4f})")

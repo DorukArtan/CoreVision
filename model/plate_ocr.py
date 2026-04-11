@@ -126,6 +126,11 @@ class PlateOCR:
         # Ensure uint8
         if img_np.dtype != np.uint8:
             img_np = (img_np * 255).astype(np.uint8)
+        
+        # 0. Crop off bottom 25% to remove dealership badges/text below plate
+        h, w = img_np.shape[:2]
+        crop_h = int(h * 0.75)
+        img_np = img_np[:crop_h, :]
             
         # 1. Upscale
         h, w = img_np.shape[:2]
@@ -133,15 +138,16 @@ class PlateOCR:
             scale = max(2, 60 // h)
             img_np = cv2.resize(img_np, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
             
-        # 2. Add Border Padding
-        # This helps the convolutional neural network read edge characters
-        pad_y = int(img_np.shape[0] * 0.2)
+        # 2. Add Border Padding (asymmetric — less on bottom to avoid
+        #    capturing dealership text/badges below the plate)
+        pad_top = int(img_np.shape[0] * 0.15)
+        pad_bottom = int(img_np.shape[0] * 0.05)  # Minimal bottom padding
         pad_x = int(img_np.shape[1] * 0.1)
         
         # Determine border color (use the average edge color or just black)
         padded = cv2.copyMakeBorder(
             img_np,
-            pad_y, pad_y, pad_x, pad_x,
+            pad_top, pad_bottom, pad_x, pad_x,
             cv2.BORDER_CONSTANT,
             value=[0, 0, 0] # black padding
         )
@@ -229,6 +235,17 @@ class PlateOCR:
             cleaned = self._clean_plate_text(raw_text)
             avg_conf = float(np.mean(confidences)) if confidences else 0.0
             
+            # Filter: if multiple detections, keep only plate-region text
+            if len(detections) > 1:
+                filtered = self._filter_plate_detections(detections, processed.shape)
+                if filtered:
+                    texts = [d['text'] for d in filtered]
+                    confidences = [d['confidence'] for d in filtered]
+                    raw_text = ' '.join(texts)
+                    cleaned = self._clean_plate_text(raw_text)
+                    avg_conf = float(np.mean(confidences))
+                    detections = filtered
+            
             return {
                 'text': cleaned,
                 'raw_text': raw_text,
@@ -282,6 +299,7 @@ class PlateOCR:
         - Remove special characters (keep strictly alphanumeric, spaces, hyphens)
         - Uppercase
         - Strip whitespace
+        - Apply Turkish plate format correction
         """
         # Uppercase
         text = text.upper().strip()
@@ -292,7 +310,163 @@ class PlateOCR:
         # Collapse multiple spaces
         text = re.sub(r'\s+', ' ', text)
         
-        return text.strip()
+        text = text.strip()
+        
+        # Try Turkish plate format correction
+        corrected = self._correct_turkish_plate(text)
+        if corrected:
+            return corrected
+        
+        return text
+    
+    def _correct_turkish_plate(self, text):
+        """
+        Correct OCR misreads using Turkish plate format rules.
+        
+        Turkish plates: {2-digit city} {1-3 letters} {2-4 digits}
+        Examples: 07 SM 014, 34 ABC 1234, 06 A 1234
+        
+        Common OCR confusions:
+            In digit positions: O→0, I→1, S→5, Z→2, B→8, G→6, T→7, L→1
+            In letter positions: 0→O, 1→I, 5→S, 2→Z, 8→B, 6→G, 7→T
+        """
+        # Character correction maps
+        LETTER_TO_DIGIT = {
+            'O': '0', 'Q': '0', 'D': '0',
+            'I': '1', 'L': '1', 'J': '1',
+            'Z': '2',
+            'S': '5',
+            'G': '6',
+            'T': '7',
+            'B': '8',
+        }
+        DIGIT_TO_LETTER = {
+            '0': 'O',
+            '1': 'I',
+            '2': 'Z',
+            '5': 'S',
+            '6': 'G',
+            '7': 'T',
+            '8': 'B',
+        }
+        
+        # Remove all spaces/hyphens to get raw characters
+        raw = re.sub(r'[\s\-]', '', text)
+        
+        # Strip trailing country code "TR" (Turkey)
+        raw_no_tr = re.sub(r'TR$', '', raw)
+        
+        # Build candidates: original, without TR, reversed versions
+        candidates = [raw, raw_no_tr]
+        if len(raw_no_tr) >= 5:
+            candidates.append(raw_no_tr[::-1])
+        
+        # Valid Turkish city codes: 01-81
+        valid_cities = set(f'{i:02d}' for i in range(1, 82))
+        
+        best_result = None
+        
+        for candidate in candidates:
+            if len(candidate) < 5 or len(candidate) > 9:
+                continue
+            
+            # Try all possible splits: DD + L(1-3) + D(2-4)
+            for n_letters in [1, 2, 3]:
+                for n_trail_digits in [2, 3, 4]:
+                    expected_len = 2 + n_letters + n_trail_digits
+                    if len(candidate) != expected_len:
+                        continue
+                    
+                    # Split into parts
+                    city_raw = candidate[:2]
+                    letters_raw = candidate[2:2+n_letters]
+                    digits_raw = candidate[2+n_letters:]
+                    
+                    # Correct city code (should be all digits)
+                    city = ''
+                    for ch in city_raw:
+                        if ch.isdigit():
+                            city += ch
+                        elif ch in LETTER_TO_DIGIT:
+                            city += LETTER_TO_DIGIT[ch]
+                        else:
+                            city += ch
+                    
+                    # Correct letter section (should be all letters)
+                    letters = ''
+                    for ch in letters_raw:
+                        if ch.isalpha():
+                            letters += ch
+                        elif ch in DIGIT_TO_LETTER:
+                            letters += DIGIT_TO_LETTER[ch]
+                        else:
+                            letters += ch
+                    
+                    # Correct trailing digits (should be all digits)
+                    digits = ''
+                    for ch in digits_raw:
+                        if ch.isdigit():
+                            digits += ch
+                        elif ch in LETTER_TO_DIGIT:
+                            digits += LETTER_TO_DIGIT[ch]
+                        else:
+                            digits += ch
+                    
+                    # Validate
+                    if city not in valid_cities:
+                        continue
+                    if not letters.isalpha():
+                        continue
+                    if not digits.isdigit():
+                        continue
+                    
+                    result = f'{city} {letters} {digits}'
+                    
+                    # Prefer longer matches and valid city codes
+                    if best_result is None or len(result) > len(best_result):
+                        best_result = result
+        
+        return best_result
+    
+    def _filter_plate_detections(self, detections, img_shape):
+        """
+        Filter OCR detections by vertical position.
+        
+        Keeps only text in the upper ~70% of the image to exclude
+        dealership badges/text that appear below the plate.
+        """
+        if not detections:
+            return detections
+        
+        img_h = img_shape[0]
+        max_y_threshold = img_h * 0.70  # Only keep text in upper 70%
+        
+        filtered = []
+        for det in detections:
+            bbox = det.get('bbox', [])
+            if not bbox:
+                filtered.append(det)  # Keep if no bbox info
+                continue
+            
+            # Get the vertical center of the detection
+            try:
+                if isinstance(bbox, (list, np.ndarray)) and len(bbox) >= 4:
+                    # bbox could be [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] (polygon)
+                    if isinstance(bbox[0], (list, np.ndarray)):
+                        y_coords = [pt[1] for pt in bbox]
+                    else:
+                        # bbox is [x1, y1, x2, y2]
+                        y_coords = [bbox[1], bbox[3]]
+                    y_center = sum(y_coords) / len(y_coords)
+                    
+                    if y_center <= max_y_threshold:
+                        filtered.append(det)
+                else:
+                    filtered.append(det)
+            except (TypeError, IndexError):
+                filtered.append(det)
+        
+        return filtered if filtered else detections  # Fallback to all if filter removes everything
     
     def read_batch(self, images, preprocess=True):
         """

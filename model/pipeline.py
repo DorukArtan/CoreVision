@@ -46,7 +46,10 @@ class VehicleRecognitionPipeline:
                  car_weights=None,
                  plate_det_weights=None,
                  car_class_names=None,
-                 num_car_classes=1716,
+                 num_car_classes=None,
+                 brand_weights=None,
+                 brand_class_names=None,
+                 brand_confidence_threshold=0.3,
                  target_fps=2,
                  device=None):
         """
@@ -55,6 +58,9 @@ class VehicleRecognitionPipeline:
             plate_det_weights: Path to YOLOv8 plate detector weights
             car_class_names: Path to car class names text file
             num_car_classes: Number of car model classes
+            brand_weights: Path to brand classifier weights (fallback)
+            brand_class_names: Path to brand class names text file
+            brand_confidence_threshold: If car confidence < this, include brand result
             target_fps: Frames per second for video extraction
             device: 'cuda', 'cpu', or None (auto-detect)
         """
@@ -67,7 +73,7 @@ class VehicleRecognitionPipeline:
         if plate_det_weights is None:
             plate_det_weights = os.path.join(PROJECT_ROOT, 'weights', 'plate_detector.pt')
         if car_class_names is None:
-            car_class_names = os.path.join(PROJECT_ROOT, 'data', 'compcars_classes.txt')
+            car_class_names = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb_classes.txt')
         
         # Initialize components
         self.video_processor = VideoProcessor(target_fps=target_fps)
@@ -77,12 +83,39 @@ class VehicleRecognitionPipeline:
             device=device
         )
         
+        # Auto-discover num_classes from class names file
+        if num_car_classes is None and os.path.exists(car_class_names):
+            with open(car_class_names, 'r', encoding='utf-8') as f:
+                num_car_classes = sum(1 for line in f if line.strip())
+        if num_car_classes is None:
+            num_car_classes = 100  # fallback default
+        
         self.car_classifier = CarClassifier(
             weights_path=car_weights if os.path.exists(car_weights) else None,
             class_names_path=car_class_names if os.path.exists(car_class_names) else None,
             num_classes=num_car_classes,
             device=device
         )
+        
+        # Brand classifier (fallback when model confidence is low)
+        self.brand_confidence_threshold = brand_confidence_threshold
+        if brand_weights is None:
+            brand_weights = os.path.join(PROJECT_ROOT, 'weights', 'brand_classifier_latest.pth')
+        if brand_class_names is None:
+            brand_class_names = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb_brand_classes.txt')
+        
+        if os.path.exists(brand_weights) and os.path.exists(brand_class_names):
+            num_brands = sum(1 for line in open(brand_class_names, 'r', encoding='utf-8') if line.strip())
+            self.brand_classifier = CarClassifier(
+                weights_path=brand_weights,
+                class_names_path=brand_class_names,
+                num_classes=num_brands,
+                device=device
+            )
+            print(f"Brand classifier loaded ({num_brands} brands, fallback threshold: {brand_confidence_threshold})")
+        else:
+            self.brand_classifier = None
+            print("Brand classifier not available (no weights found)")
         
         self.plate_ocr = PlateOCR(engine='auto')
         self.country_identifier = CountryIdentifier()
@@ -126,6 +159,17 @@ class VehicleRecognitionPipeline:
                 result['car_make_model'] = car_result['make_model']
                 result['car_confidence'] = car_result['confidence']
                 result['car_top_k'] = car_result['top_k']
+                
+                # Brand fallback: if model confidence is low, add brand prediction
+                if (self.brand_classifier is not None 
+                    and car_result['confidence'] < self.brand_confidence_threshold):
+                    brand_result = self.brand_classifier.predict(vehicle['crop'])
+                    result['brand'] = brand_result['make_model']
+                    result['brand_confidence'] = brand_result['confidence']
+                    result['brand_top_k'] = brand_result['top_k']
+                    result['brand_fallback'] = True
+                else:
+                    result['brand_fallback'] = False
             
             # Find associated plates
             associated_plates = [

@@ -21,7 +21,7 @@ class VehicleClassificationHead(nn.Module):
     Loss: CrossEntropyLoss
     """
     
-    def __init__(self, feature_dim=1280, num_classes=196, dropout=0.3):
+    def __init__(self, feature_dim=1280, num_classes=100, dropout=0.3):
         super(VehicleClassificationHead, self).__init__()
         
         self.classifier = nn.Sequential(

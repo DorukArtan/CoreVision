@@ -16,11 +16,12 @@ class Config:
     WEIGHTS_DIR = os.path.join(PROJECT_ROOT, 'weights')
     
     # Dataset paths (update these to your local paths)
-    VEHICLE_DATASET_DIR = os.path.join(PROJECT_ROOT, 'data', 'stanford_cars')
+    VEHICLE_DATASET_DIR = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb')
     PLATE_DATASET_DIR = os.path.join(PROJECT_ROOT, 'data', 'turkish_plates')
+    MIN_SAMPLES_PER_CLASS = 5          # Drop classes with fewer images
     
     # ---- Model ----
-    NUM_VEHICLE_CLASSES = 196          # Stanford Cars has 196 classes
+    NUM_VEHICLE_CLASSES = 0            # Auto-discovered from VMMRdb at runtime
     PRETRAINED_BACKBONE = True         # Use ImageNet pretrained weights
     INPUT_SIZE = 224                   # Input image size (224x224)
     

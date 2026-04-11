@@ -2,7 +2,7 @@
 setup_data.py — Extract and Organize Datasets from ZIP Files
 
 Usage:
-    python scripts/setup_data.py --cars path/to/stanford_cars.zip --plates path/to/turkish_plates.zip
+    python scripts/setup_data.py --vmmrdb path/to/VMMRdb.zip --plates path/to/turkish_plates.zip
 
 This script will:
 1. Extract the ZIP files
@@ -68,27 +68,27 @@ def find_label_dirs(root):
     return result
 
 
-def setup_stanford_cars(zip_path):
+def setup_vmmrdb(zip_path):
     """
-    Extract and organize Stanford Cars dataset.
+    Extract and organize VMMRdb dataset.
 
-    Expected output structure:
-        data/stanford_cars/
-        ├── train/
-        │   ├── ClassName1/
-        │   │   ├── image1.jpg
-        │   │   └── ...
-        │   └── ClassName2/
-        │       └── ...
-        └── test/
-            └── (same structure)
+    Expected output structure (folder-per-class):
+        data/vmmrdb/
+        ├── Acura_ILX_2013/
+        │   ├── image1.jpg
+        │   └── ...
+        ├── BMW_3_Series_2015/
+        │   └── ...
+        └── ...
+
+    Each subdirectory is one make_model_year class.
     """
     print("\n" + "=" * 60)
-    print("STANFORD CARS DATASET")
+    print("VMMRdb DATASET (Vehicle Make & Model Recognition)")
     print("=" * 60)
 
-    target_dir = DATA_DIR / "stanford_cars"
-    temp_dir = DATA_DIR / "_temp_cars"
+    target_dir = DATA_DIR / "vmmrdb"
+    temp_dir = DATA_DIR / "_temp_vmmrdb"
 
     # Extract to temp
     os.makedirs(temp_dir, exist_ok=True)
@@ -110,11 +110,6 @@ def setup_stanford_cars(zip_path):
     if len(img_dirs) > 10:
         print(f"    ... and {len(img_dirs) - 10} more")
 
-    # Try to detect the structure
-    # Case 1: Already organized as train/test with class subdirectories
-    # Case 2: Flat with train/ and test/ folders
-    # Case 3: Single folder with all images
-
     os.makedirs(target_dir, exist_ok=True)
 
     # Check if there's a nested root folder (common in ZIPs)
@@ -124,41 +119,17 @@ def setup_stanford_cars(zip_path):
         actual_root = temp_dir / temp_contents[0]
         print(f"  Detected nested root: {temp_contents[0]}/")
 
-    # Check if train/test split exists
-    has_train = any(
-        'train' in os.path.relpath(d, actual_root).lower().split(os.sep)
-        for d, _ in img_dirs
-    )
-    has_test = any(
-        'test' in os.path.relpath(d, actual_root).lower().split(os.sep)
-        for d, _ in img_dirs
-    )
-
-    if has_train and has_test:
-        print("  ✅ Detected train/test split in the dataset!")
-        # Move the entire structure
-        if actual_root != target_dir:
-            # Copy contents to target
-            for item in os.listdir(actual_root):
-                src = actual_root / item
-                dst = target_dir / item
-                if src.is_dir():
-                    if dst.exists():
-                        shutil.rmtree(dst)
-                    shutil.copytree(src, dst)
-                else:
-                    shutil.copy2(src, dst)
-    else:
-        print("  ⚠️  No train/test split detected. Moving all contents to target.")
-        for item in os.listdir(actual_root):
-            src = actual_root / item
-            dst = target_dir / item
-            if src.is_dir():
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
+    # VMMRdb should have class subdirectories directly under root
+    # Copy the entire structure
+    for item in os.listdir(actual_root):
+        src = actual_root / item
+        dst = target_dir / item
+        if src.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
 
     # Cleanup temp
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -168,7 +139,13 @@ def setup_stanford_cars(zip_path):
     _print_tree(target_dir, max_depth=2)
     
     total_images = sum(c for _, c in find_image_dirs(target_dir))
-    print(f"\n  Total images: {total_images}")
+    class_dirs = [d for d in os.listdir(target_dir) if os.path.isdir(target_dir / d)]
+    print(f"\n  Total images: {total_images:,}")
+    print(f"  Total class directories: {len(class_dirs)}")
+    
+    if len(class_dirs) > 0:
+        avg = total_images / len(class_dirs)
+        print(f"  Avg images per class: {avg:.1f}")
 
     return True
 
@@ -300,17 +277,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/setup_data.py --cars ~/Downloads/stanford_cars.zip --plates ~/Downloads/plates.zip
-  python scripts/setup_data.py --cars C:\\Users\\USER\\Downloads\\cars.zip
+  python scripts/setup_data.py --vmmrdb ~/Downloads/VMMRdb.zip --plates ~/Downloads/plates.zip
+  python scripts/setup_data.py --vmmrdb C:\\Users\\USER\\Downloads\\VMMRdb.zip
   python scripts/setup_data.py --plates C:\\Users\\USER\\Downloads\\plates.zip
         """
     )
-    parser.add_argument('--cars', type=str, help='Path to Stanford Cars ZIP file')
+    parser.add_argument('--vmmrdb', type=str, help='Path to VMMRdb ZIP file')
     parser.add_argument('--plates', type=str, help='Path to Turkish Plates ZIP file')
 
     args = parser.parse_args()
 
-    if not args.cars and not args.plates:
+    if not args.vmmrdb and not args.plates:
         parser.print_help()
         print("\n⚠️  Please provide at least one ZIP file path!")
         sys.exit(1)
@@ -323,8 +300,8 @@ Examples:
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    if args.cars:
-        setup_stanford_cars(args.cars)
+    if args.vmmrdb:
+        setup_vmmrdb(args.vmmrdb)
 
     if args.plates:
         setup_turkish_plates(args.plates)
