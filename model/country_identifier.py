@@ -226,18 +226,38 @@ class CountryIdentifier:
     
     def _check_country_code(self, plate_text):
         """
-        Check if the plate text starts with or contains a known country code.
+        Check if plate text contains a known country code token.
+
+        Supports:
+        - Prefix codes: "PL WZY54495"
+        - Suffix codes: "WZY54495 PL"
+        - Separated forms with hyphen/space: "TR-34ABC123"
         """
         text = plate_text.strip().upper()
-        
-        # Check longest codes first (3 letters, then 2, then 1)
+
+        # Normalize separators and split into alphanumeric tokens.
+        normalized = re.sub(r'[\-_/]+', ' ', text)
+        tokens = [t for t in re.split(r'\s+', normalized) if t]
+
+        # Check tokens first (most reliable for OCR outputs like "PL WZY54495").
+        for token in tokens:
+            if token in COUNTRY_CODES:
+                return {
+                    'country': COUNTRY_CODES[token],
+                    'country_code': token,
+                    'confidence': 0.9 if len(token) >= 2 else 0.75,
+                    'method': 'country_code_token'
+                }
+
+        # Backward-compatible prefix fallback on compact strings.
+        compact = re.sub(r'[^A-Z0-9]', '', text)
         for length in [3, 2, 1]:
-            prefix = text[:length]
+            prefix = compact[:length]
             if prefix in COUNTRY_CODES:
                 return {
                     'country': COUNTRY_CODES[prefix],
                     'country_code': prefix,
-                    'confidence': 0.6 + (length * 0.1),  # Longer codes = more confident
+                    'confidence': 0.6 + (length * 0.1),
                     'method': 'country_code_prefix'
                 }
         

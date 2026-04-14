@@ -9,16 +9,19 @@ Falls back to EasyOCR if PaddleOCR is unavailable.
 import numpy as np
 from PIL import Image
 import re
+import itertools
 
 # Try PaddleOCR first, fall back to EasyOCR
 PADDLE_AVAILABLE = False
 EASYOCR_AVAILABLE = False
+PADDLE_IMPORT_ERROR = None
 
 try:
     from paddleocr import PaddleOCR
     PADDLE_AVAILABLE = True
-except ImportError:
-    pass
+except (ImportError, TypeError) as exc:
+    # Some PaddleOCR dependency stacks fail at import time on Python < 3.9.
+    PADDLE_IMPORT_ERROR = exc
 
 try:
     import easyocr
@@ -61,6 +64,12 @@ class PlateOCR:
             elif EASYOCR_AVAILABLE:
                 self.engine = 'easyocr'
             else:
+                if PADDLE_IMPORT_ERROR is not None:
+                    raise ImportError(
+                        "No OCR engine available. PaddleOCR import failed "
+                        f"({type(PADDLE_IMPORT_ERROR).__name__}: {PADDLE_IMPORT_ERROR}). "
+                        "Install EasyOCR (pip install easyocr) or use Python 3.9+ for PaddleOCR."
+                    )
                 raise ImportError("No OCR engine available. Install paddleocr or easyocr")
         else:
             if engine == 'paddle' and not PADDLE_AVAILABLE:
@@ -127,9 +136,10 @@ class PlateOCR:
         if img_np.dtype != np.uint8:
             img_np = (img_np * 255).astype(np.uint8)
         
-        # 0. Crop off bottom 25% to remove dealership badges/text below plate
+        # 0. Lightly crop bottom to reduce below-plate noise without
+        #    removing character descenders/loops on the plate itself.
         h, w = img_np.shape[:2]
-        crop_h = int(h * 0.75)
+        crop_h = int(h * 0.90)
         img_np = img_np[:crop_h, :]
             
         # 1. Upscale
@@ -299,6 +309,7 @@ class PlateOCR:
         - Remove special characters (keep strictly alphanumeric, spaces, hyphens)
         - Uppercase
         - Strip whitespace
+        - Apply Polish plate noise trimming
         - Apply Turkish plate format correction
         """
         # Uppercase
@@ -311,13 +322,94 @@ class PlateOCR:
         text = re.sub(r'\s+', ' ', text)
         
         text = text.strip()
+
+        # Try Polish plate normalization first (e.g., trim noisy suffixes like "7D")
+        polish_normalized = self._normalize_polish_plate(text)
+        if polish_normalized:
+            return polish_normalized
         
         # Try Turkish plate format correction
+        corrected = self._correct_turkish_plate_by_position(text)
+        if corrected:
+            return corrected
+
         corrected = self._correct_turkish_plate(text)
         if corrected:
             return corrected
         
         return text
+
+    def _normalize_polish_plate(self, text):
+        """
+        Normalize likely Polish format plates and remove OCR tail noise.
+
+        Expected core format: 2-3 letters + 4-5 digits
+        Examples:
+            WZY 54495
+            WZY-54495
+            WZY-54495 7D  -> WZY 54495
+            WZY544957D    -> WZY 54495
+        """
+        # Format with optional separators and an optional short noisy suffix.
+        m = re.match(r'^([A-Z]{2,3})[\s\-]?(\d{4,5})(?:[\s\-]?([A-Z0-9]{1,2}))?$', text)
+        if m:
+            area = m.group(1)
+            digits = m.group(2)
+            suffix = m.group(3)
+            # If suffix exists, treat it as OCR noise for this Polish format.
+            if suffix:
+                return f'{area} {digits}'
+            return f'{area} {digits}'
+
+        # Handle compact text where noise is glued to the end with no separators.
+        m = re.match(r'^([A-Z]{2,3})(\d{4,5})([A-Z0-9]{1,2})$', text)
+        if m:
+            return f'{m.group(1)} {m.group(2)}'
+
+        return None
+
+    def _correct_turkish_plate_by_position(self, text):
+        """
+        Fast, position-aware Turkish correction for already-separated text.
+
+        Expected token layout:
+            {city_code} {letters} {digits}
+        where:
+            city_code -> 2 digits
+            letters   -> 1-3 letters
+            digits    -> 2-4 digits
+        """
+        LETTER_TO_DIGIT = {
+            'O': '0', 'Q': '0', 'D': '0',
+            'I': '1', 'L': '1', 'J': '1',
+            'Z': '2', 'S': '5', 'G': '6', 'T': '7', 'B': '8',
+        }
+        DIGIT_TO_LETTER = {
+            '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '6': 'G', '7': 'T', '8': 'B',
+        }
+
+        tokens = [t for t in re.split(r'[\s\-]+', text.strip().upper()) if t]
+        if len(tokens) != 3:
+            return None
+
+        city_raw, letters_raw, digits_raw = tokens
+        valid_cities = set(f'{i:02d}' for i in range(1, 82))
+
+        if not (1 <= len(letters_raw) <= 3 and 2 <= len(digits_raw) <= 4):
+            return None
+
+        city = ''.join(ch if ch.isdigit() else LETTER_TO_DIGIT.get(ch, ch) for ch in city_raw)
+        letters = ''.join(ch if ch.isalpha() else DIGIT_TO_LETTER.get(ch, ch) for ch in letters_raw)
+        digits = ''.join(ch if ch.isdigit() else LETTER_TO_DIGIT.get(ch, ch) for ch in digits_raw)
+
+        if city not in valid_cities:
+            return None
+        if not letters.isalpha():
+            return None
+        if not digits.isdigit():
+            return None
+
+        return f'{city} {letters} {digits}'
     
     def _correct_turkish_plate(self, text):
         """
@@ -349,6 +441,14 @@ class PlateOCR:
             '7': 'T',
             '8': 'B',
         }
+        LETTER_ALTERNATIVES = {
+            # Common Turkish plate OCR confusions between letters
+            'I': [('A', 0.08)],
+            'R': [('B', 0.14)],
+            'P': [('B', 0.18)],
+            'Y': [('V', 0.03)],
+            'V': [('Y', 0.06)],
+        }
         
         # Remove all spaces/hyphens to get raw characters
         raw = re.sub(r'[\s\-]', '', text)
@@ -365,6 +465,8 @@ class PlateOCR:
         valid_cities = set(f'{i:02d}' for i in range(1, 82))
         
         best_result = None
+        best_score = float('inf')
+        best_letters = None
         
         for candidate in candidates:
             if len(candidate) < 5 or len(candidate) > 9:
@@ -382,49 +484,105 @@ class PlateOCR:
                     letters_raw = candidate[2:2+n_letters]
                     digits_raw = candidate[2+n_letters:]
                     
-                    # Correct city code (should be all digits)
+                    # City: deterministic normalization (must become 2 digits)
                     city = ''
+                    city_penalty = 0.0
                     for ch in city_raw:
                         if ch.isdigit():
                             city += ch
                         elif ch in LETTER_TO_DIGIT:
                             city += LETTER_TO_DIGIT[ch]
+                            city_penalty += 0.12
                         else:
                             city += ch
-                    
-                    # Correct letter section (should be all letters)
-                    letters = ''
-                    for ch in letters_raw:
-                        if ch.isalpha():
-                            letters += ch
-                        elif ch in DIGIT_TO_LETTER:
-                            letters += DIGIT_TO_LETTER[ch]
-                        else:
-                            letters += ch
-                    
-                    # Correct trailing digits (should be all digits)
-                    digits = ''
-                    for ch in digits_raw:
-                        if ch.isdigit():
-                            digits += ch
-                        elif ch in LETTER_TO_DIGIT:
-                            digits += LETTER_TO_DIGIT[ch]
-                        else:
-                            digits += ch
-                    
-                    # Validate
+                            city_penalty += 1.0
+
                     if city not in valid_cities:
                         continue
-                    if not letters.isalpha():
-                        continue
-                    if not digits.isdigit():
-                        continue
-                    
-                    result = f'{city} {letters} {digits}'
-                    
-                    # Prefer longer matches and valid city codes
-                    if best_result is None or len(result) > len(best_result):
-                        best_result = result
+
+                    # Build letter options with penalties.
+                    letter_choices = []
+                    for idx, ch in enumerate(letters_raw):
+                        opts = []
+                        if ch.isalpha():
+                            opts.append((ch, 0.0))
+                        if ch in DIGIT_TO_LETTER:
+                            opts.append((DIGIT_TO_LETTER[ch], 0.12))
+                        # Additional letter-vs-letter alternatives for OCR confusion.
+                        for alt, penalty in LETTER_ALTERNATIVES.get(ch, []):
+                            opts.append((alt, penalty))
+                        if not opts:
+                            opts.append((ch, 1.0))
+                        letter_choices.append(opts)
+
+                    # Build digit options with penalties.
+                    digit_choices = []
+                    for ch in digits_raw:
+                        opts = []
+                        if ch.isdigit():
+                            opts.append((ch, 0.0))
+                        if ch in LETTER_TO_DIGIT:
+                            opts.append((LETTER_TO_DIGIT[ch], 0.12))
+                        if not opts:
+                            opts.append((ch, 1.0))
+                        digit_choices.append(opts)
+
+                    for letters_combo in itertools.product(*letter_choices):
+                        letters = ''.join(ch for ch, _ in letters_combo)
+                        letters_penalty = sum(p for _, p in letters_combo)
+                        if not letters.isalpha():
+                            continue
+
+                        for digits_combo in itertools.product(*digit_choices):
+                            digits_base = ''.join(ch for ch, _ in digits_combo)
+                            digits_penalty = sum(p for _, p in digits_combo)
+                            if not digits_base.isdigit():
+                                continue
+
+                            # Missing narrow 0 is common; if only 2 digits seen, try inserting 0.
+                            digit_variants = [(digits_base, 0.0)]
+                            if len(digits_base) == 2:
+                                digit_variants.extend([
+                                    (f'{digits_base[0]}0{digits_base[1]}', 0.06),
+                                    (f'0{digits_base}', 0.15),
+                                    (f'{digits_base}0', 0.18),
+                                ])
+
+                            for digits, insert_penalty in digit_variants:
+                                if len(digits) < 2 or len(digits) > 4:
+                                    continue
+                                if not digits.isdigit():
+                                    continue
+
+                                result = f'{city} {letters} {digits}'
+
+                                score = city_penalty + letters_penalty + digits_penalty + insert_penalty
+                                score += {3: 0.0, 2: 0.18, 1: 0.35}.get(n_letters, 0.35)
+                                score += {3: 0.0, 4: 0.10, 2: 0.30}.get(len(digits), 0.30)
+
+                                # If OCR dropped one trailing digit (2-digit read) and
+                                # last letter was read as R/P, B is often a visual confusion.
+                                if (
+                                    len(digits_base) == 2
+                                    and letters_raw
+                                    and letters_raw[-1] in {'R', 'P'}
+                                    and letters.endswith('B')
+                                ):
+                                    score -= 0.10
+
+                                should_replace = False
+                                if best_result is None or score < best_score:
+                                    should_replace = True
+                                elif abs(score - best_score) <= 0.02 and best_letters is not None:
+                                    # Tie-breaker for a frequent OCR confusion: prefer V over Y
+                                    # when scores are effectively equal.
+                                    if letters.count('Y') < best_letters.count('Y'):
+                                        should_replace = True
+
+                                if should_replace:
+                                    best_result = result
+                                    best_score = score
+                                    best_letters = letters
         
         return best_result
     

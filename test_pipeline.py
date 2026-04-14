@@ -18,6 +18,12 @@ for i, v in enumerate(result['vehicles']):
         print(f"  Brand (fallback):  {v.get('brand', 'N/A')} ({v.get('brand_confidence', 0):.1%})")
     for p in v.get('plates', []):
         print(f"  Plate: {p.get('text', 'N/A')}")
+        country = p.get('country', 'Unknown')
+        country_code = p.get('country_code', '')
+        if country_code:
+            print(f"  Country: {country} ({country_code})")
+        else:
+            print(f"  Country: {country}")
 
 if not result['vehicles']:
     print("No vehicles detected.")
