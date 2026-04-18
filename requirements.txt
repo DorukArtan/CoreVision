@@ -5,6 +5,7 @@
 torch>=2.1.0
 torchvision>=0.16.0
 timm>=0.9.0                # EfficientNetV2-S backbone
+open-clip-torch>=2.20.0    # CLIP zero-shot brand classification
 
 # ── Detection ─────────────────────────────────
 ultralytics>=8.0.0         # YOLOv8

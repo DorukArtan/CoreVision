@@ -21,6 +21,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from model.video_processor import VideoProcessor
 from model.detector import VehiclePlateDetector
 from model.car_classifier import CarClassifier
+from model.clip_brand_classifier import CLIPBrandClassifier
 from model.plate_ocr import PlateOCR
 from model.country_identifier import CountryIdentifier
 
@@ -47,8 +48,7 @@ class VehicleRecognitionPipeline:
                  plate_det_weights=None,
                  car_class_names=None,
                  num_car_classes=None,
-                 brand_weights=None,
-                 brand_class_names=None,
+                 clip_brand_list=None,
                  brand_confidence_threshold=0.3,
                  target_fps=2,
                  device=None):
@@ -58,9 +58,8 @@ class VehicleRecognitionPipeline:
             plate_det_weights: Path to YOLOv8 plate detector weights
             car_class_names: Path to car class names text file
             num_car_classes: Number of car model classes
-            brand_weights: Path to brand classifier weights (fallback)
-            brand_class_names: Path to brand class names text file
-            brand_confidence_threshold: If car confidence < this, include brand result
+            clip_brand_list: Path to brand names file for CLIP zero-shot fallback
+            brand_confidence_threshold: If car confidence < this, use CLIP brand fallback
             target_fps: Frames per second for video extraction
             device: 'cuda', 'cpu', or None (auto-detect)
         """
@@ -97,12 +96,10 @@ class VehicleRecognitionPipeline:
             device=device
         )
         
-        # Brand classifier (fallback when model confidence is low)
+        # Brand classifier (EfficientNet — primary brand prediction)
         self.brand_confidence_threshold = brand_confidence_threshold
-        if brand_weights is None:
-            brand_weights = os.path.join(PROJECT_ROOT, 'weights', 'brand_classifier_latest.pth')
-        if brand_class_names is None:
-            brand_class_names = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb_brand_classes.txt')
+        brand_weights = os.path.join(PROJECT_ROOT, 'weights', 'brand_classifier_latest.pth')
+        brand_class_names = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb_brand_classes.txt')
         
         if os.path.exists(brand_weights) and os.path.exists(brand_class_names):
             num_brands = sum(1 for line in open(brand_class_names, 'r', encoding='utf-8') if line.strip())
@@ -112,10 +109,23 @@ class VehicleRecognitionPipeline:
                 num_classes=num_brands,
                 device=device
             )
-            print(f"Brand classifier loaded ({num_brands} brands, fallback threshold: {brand_confidence_threshold})")
+            print(f"Brand classifier loaded ({num_brands} brands)")
         else:
             self.brand_classifier = None
             print("Brand classifier not available (no weights found)")
+        
+        # CLIP zero-shot classifier (additional fallback for unknown brands)
+        if clip_brand_list is None:
+            clip_brand_list = os.path.join(PROJECT_ROOT, 'data', 'clip_brands.txt')
+        
+        try:
+            self.clip_classifier = CLIPBrandClassifier(
+                brand_list_path=clip_brand_list,
+                device=device
+            )
+        except Exception as e:
+            self.clip_classifier = None
+            print(f"CLIP brand classifier not available: {e}")
         
         self.plate_ocr = PlateOCR(engine='auto')
         self.country_identifier = CountryIdentifier()
@@ -153,23 +163,26 @@ class VehicleRecognitionPipeline:
                 'vehicle_det_confidence': vehicle['confidence'],
             }
             
-            # Classify car model
+            # Classify car model + brand
             if 'crop' in vehicle:
                 car_result = self.car_classifier.predict(vehicle['crop'])
                 result['car_make_model'] = car_result['make_model']
                 result['car_confidence'] = car_result['confidence']
                 result['car_top_k'] = car_result['top_k']
                 
-                # Brand fallback: if model confidence is low, add brand prediction
-                if (self.brand_classifier is not None 
-                    and car_result['confidence'] < self.brand_confidence_threshold):
+                # Brand prediction (EfficientNet)
+                if self.brand_classifier is not None:
                     brand_result = self.brand_classifier.predict(vehicle['crop'])
                     result['brand'] = brand_result['make_model']
                     result['brand_confidence'] = brand_result['confidence']
                     result['brand_top_k'] = brand_result['top_k']
-                    result['brand_fallback'] = True
-                else:
-                    result['brand_fallback'] = False
+                
+                # CLIP fallback (zero-shot, works for any brand)
+                if self.clip_classifier is not None:
+                    clip_result = self.clip_classifier.predict(vehicle['crop'])
+                    result['clip_brand'] = clip_result['brand']
+                    result['clip_brand_confidence'] = clip_result['confidence']
+                    result['clip_brand_top_k'] = clip_result['top_k']
             
             # Find associated plates
             associated_plates = [
