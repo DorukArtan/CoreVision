@@ -147,8 +147,10 @@ class VehiclePlateDetector:
                 }
                 
                 if return_crops:
-                    cx1, cy1 = max(0, x1), max(0, y1)
-                    cx2, cy2 = min(w, x2), min(h, y2)
+                    # Pad the plate crop to avoid cutting off edge characters
+                    pad = 10
+                    cx1, cy1 = max(0, x1 - pad), max(0, y1 - pad)
+                    cx2, cy2 = min(w, x2 + pad), min(h, y2 + pad)
                     crop = Image.fromarray(img_np[cy1:cy2, cx1:cx2])
                     plate['crop'] = crop
                 

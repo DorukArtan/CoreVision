@@ -119,13 +119,14 @@ class PlateOCR:
         """
         Preprocess a cropped plate image for better OCR accuracy.
         
-        New Pipeline:
-        1. Keep original color (PaddleOCR prefers raw RGB/BGR)
-        2. Upscale small plates
-        3. Add a generous synthetic border (padding) so edge characters aren't cut off
+        Pipeline:
+        1. Upscale small plates aggressively (target height ~120px)
+        2. Apply CLAHE contrast enhancement
+        3. Sharpen to make character edges crisper
+        4. Add white border padding so edge characters aren't cut off
         
         Returns:
-            Preprocessed numpy array
+            Preprocessed numpy array (color-enhanced version)
         """
         try:
             import cv2
@@ -136,37 +137,136 @@ class PlateOCR:
         if img_np.dtype != np.uint8:
             img_np = (img_np * 255).astype(np.uint8)
         
-        # 0. Lightly crop bottom to reduce below-plate noise without
-        #    removing character descenders/loops on the plate itself.
         h, w = img_np.shape[:2]
-        crop_h = int(h * 0.90)
-        img_np = img_np[:crop_h, :]
             
-        # 1. Upscale
-        h, w = img_np.shape[:2]
-        if h < 60:
-            scale = max(2, 60 // h)
+        # 1. Aggressive upscale — OCR needs at least ~120px height for
+        #    reliable character segmentation
+        target_h = 120
+        if h < target_h:
+            scale = max(2, target_h // h)
             img_np = cv2.resize(img_np, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
-            
-        # 2. Add Border Padding (asymmetric — less on bottom to avoid
-        #    capturing dealership text/badges below the plate)
-        pad_top = int(img_np.shape[0] * 0.15)
-        pad_bottom = int(img_np.shape[0] * 0.05)  # Minimal bottom padding
-        pad_x = int(img_np.shape[1] * 0.1)
         
-        # Determine border color (use the average edge color or just black)
+        # 2. Convert to LAB and apply CLAHE on L-channel for contrast boost
+        lab = cv2.cvtColor(img_np, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        l = clahe.apply(l)
+        enhanced = cv2.merge([l, a, b])
+        enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+        
+        # 3. Sharpen with unsharp mask
+        blurred = cv2.GaussianBlur(enhanced, (0, 0), 2.0)
+        enhanced = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+            
+        # 4. Add white border padding (white matches typical plate background
+        #    and doesn't create harsh edges that confuse text detection)
+        pad_y = int(enhanced.shape[0] * 0.15)
+        pad_x = int(enhanced.shape[1] * 0.10)
+        
+        # Use the mean color of the plate edges for a more natural border
+        border_color = self._estimate_border_color(enhanced)
+        
         padded = cv2.copyMakeBorder(
-            img_np,
-            pad_top, pad_bottom, pad_x, pad_x,
+            enhanced,
+            pad_y, pad_y, pad_x, pad_x,
             cv2.BORDER_CONSTANT,
-            value=[0, 0, 0] # black padding
+            value=border_color
         )
         
         return padded
     
+    def preprocess_plate_binary(self, img_np):
+        """
+        Create a high-contrast binary version of the plate for OCR fallback.
+        
+        This produces dark text on a white background, which is ideal
+        for OCR engines that struggle with colored/textured plates.
+        
+        Returns:
+            Preprocessed numpy array (binary, 3-channel)
+        """
+        try:
+            import cv2
+        except ImportError:
+            return img_np
+            
+        if img_np.dtype != np.uint8:
+            img_np = (img_np * 255).astype(np.uint8)
+        
+        h, w = img_np.shape[:2]
+        
+        # Upscale
+        target_h = 120
+        if h < target_h:
+            scale = max(2, target_h // h)
+            img_np = cv2.resize(img_np, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+        
+        # Apply CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+        gray = clahe.apply(gray)
+        
+        # Adaptive threshold — handles uneven lighting across the plate
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=15,
+            C=10
+        )
+        
+        # Light morphological cleanup — remove small noise dots
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        
+        # Convert back to 3-channel for OCR engines that expect color input
+        binary_3ch = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        
+        # Add white padding
+        pad_y = int(binary_3ch.shape[0] * 0.15)
+        pad_x = int(binary_3ch.shape[1] * 0.10)
+        padded = cv2.copyMakeBorder(
+            binary_3ch,
+            pad_y, pad_y, pad_x, pad_x,
+            cv2.BORDER_CONSTANT,
+            value=[255, 255, 255]
+        )
+        
+        return padded
+    
+    def _estimate_border_color(self, img):
+        """Estimate the dominant background color from the plate edges."""
+        h, w = img.shape[:2]
+        # Sample pixels from the edges
+        edge_pixels = []
+        edge_width = max(3, min(w // 10, 10))
+        edge_height = max(3, min(h // 10, 10))
+        
+        # Top and bottom strips
+        edge_pixels.append(img[:edge_height, :].reshape(-1, 3))
+        edge_pixels.append(img[-edge_height:, :].reshape(-1, 3))
+        # Left and right strips
+        edge_pixels.append(img[:, :edge_width].reshape(-1, 3))
+        edge_pixels.append(img[:, -edge_width:].reshape(-1, 3))
+        
+        all_pixels = np.vstack(edge_pixels)
+        mean_color = np.mean(all_pixels, axis=0).astype(int).tolist()
+        
+        # If the mean is very dark, default to white (most plates have
+        # white/light backgrounds)
+        if sum(mean_color) < 200:
+            return [255, 255, 255]
+        return mean_color
+    
     def read_plate(self, image, preprocess=True):
         """
         Read text from a cropped license plate image.
+        
+        Uses a multi-attempt strategy: tries OCR on both a color-enhanced
+        and a binarized version of the plate, then picks the result with
+        the highest confidence.
         
         Args:
             image: PIL Image, numpy array, or file path
@@ -179,25 +279,56 @@ class PlateOCR:
                 'confidence': float - OCR confidence (0-1)
                 'detections': list - raw OCR detection details
         """
-        # Convert to numpy
+        # Convert to numpy (BGR for cv2 compatibility)
         if isinstance(image, str):
             image = Image.open(image).convert('RGB')
         if isinstance(image, Image.Image):
             img_np = np.array(image)
+            # PIL gives RGB; OpenCV preprocessing expects BGR
+            try:
+                import cv2
+                img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            except ImportError:
+                pass
         else:
             img_np = image
         
-        # Preprocess
-        if preprocess:
-            processed = self.preprocess_plate(img_np)
-        else:
-            processed = img_np
+        if not preprocess:
+            # No preprocessing — run OCR directly
+            if self.engine == 'paddle':
+                return self._read_paddle(img_np, img_np)
+            else:
+                return self._read_easyocr(img_np, img_np)
         
-        # Run OCR
+        # --- Multi-attempt OCR ---
+        # Attempt 1: Color-enhanced preprocessing
+        processed_color = self.preprocess_plate(img_np)
         if self.engine == 'paddle':
-            return self._read_paddle(processed, img_np)
+            result_color = self._read_paddle(processed_color, img_np)
         else:
-            return self._read_easyocr(processed, img_np)
+            result_color = self._read_easyocr(processed_color, img_np)
+        
+        # If color result is already very confident, skip binary attempt
+        if result_color['confidence'] >= 0.90 and result_color['text']:
+            return result_color
+        
+        # Attempt 2: Binary (adaptive threshold) preprocessing
+        processed_binary = self.preprocess_plate_binary(img_np)
+        if self.engine == 'paddle':
+            result_binary = self._read_paddle(processed_binary, img_np)
+        else:
+            result_binary = self._read_easyocr(processed_binary, img_np)
+        
+        # Pick the better result
+        # Prefer whichever has higher confidence, but also prefer results
+        # that actually found text
+        if not result_color['text'] and result_binary['text']:
+            return result_binary
+        if result_color['text'] and not result_binary['text']:
+            return result_color
+        if result_binary['confidence'] > result_color['confidence']:
+            return result_binary
+        return result_color
     
     def _read_paddle(self, processed, original):
         """Read plate with PaddleOCR."""
@@ -256,6 +387,13 @@ class PlateOCR:
                     avg_conf = float(np.mean(confidences))
                     detections = filtered
             
+            # If the cleaned text looks like it contains extra non-plate text
+            # (e.g. dealer badges), try to extract just the plate portion
+            if cleaned and len(cleaned) > 12:
+                plate_only = self._extract_plate_from_noisy_text(cleaned)
+                if plate_only:
+                    cleaned = plate_only
+            
             return {
                 'text': cleaned,
                 'raw_text': raw_text,
@@ -301,6 +439,36 @@ class PlateOCR:
             'confidence': 0.0,
             'detections': []
         }
+    
+    def _extract_plate_from_noisy_text(self, text):
+        """
+        Try to extract a valid license plate pattern from noisy OCR text
+        that may contain extra text (dealer badges, watermarks, etc.).
+        
+        Scans the text for known plate patterns:
+        - Turkish: 2-digit city + 1-3 letters + 2-4 digits
+        - Polish: 2-3 letters + 4-5 digits
+        """
+        text = text.upper().strip()
+        
+        # Try to find a Turkish-style plate pattern anywhere in the text
+        # Pattern: DD + space/sep + L{1,3} + space/sep + D{2,4}
+        turkish = re.search(
+            r'(\d{2})\s*([A-Z]{1,3})\s*(\d{2,4})',
+            text
+        )
+        if turkish:
+            city = turkish.group(1)
+            valid_cities = set(f'{i:02d}' for i in range(1, 82))
+            if city in valid_cities:
+                return f'{city} {turkish.group(2)} {turkish.group(3)}'
+        
+        # Try Polish-style plate pattern
+        polish = re.search(r'([A-Z]{2,3})\s*(\d{4,5})', text)
+        if polish:
+            return f'{polish.group(1)} {polish.group(2)}'
+        
+        return None
     
     def _clean_plate_text(self, text):
         """
@@ -588,43 +756,78 @@ class PlateOCR:
     
     def _filter_plate_detections(self, detections, img_shape):
         """
-        Filter OCR detections by vertical position.
+        Filter OCR detections to keep only actual plate text,
+        excluding dealership badges/text that appear below the plate.
         
-        Keeps only text in the upper ~70% of the image to exclude
-        dealership badges/text that appear below the plate.
+        Strategy:
+        1. Vertical filter: keep text in the upper 60% of the image
+        2. Size heuristic: the plate text is typically the tallest detection;
+           smaller text below it is likely a dealer badge
         """
         if not detections:
             return detections
         
         img_h = img_shape[0]
-        max_y_threshold = img_h * 0.70  # Only keep text in upper 70%
+        max_y_threshold = img_h * 0.60  # Only keep text in upper 60%
         
-        filtered = []
-        for det in detections:
+        def _get_bbox_info(det):
+            """Extract y_center and height from a detection bbox."""
             bbox = det.get('bbox', [])
             if not bbox:
-                filtered.append(det)  # Keep if no bbox info
-                continue
-            
-            # Get the vertical center of the detection
+                return None, None
             try:
                 if isinstance(bbox, (list, np.ndarray)) and len(bbox) >= 4:
-                    # bbox could be [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] (polygon)
                     if isinstance(bbox[0], (list, np.ndarray)):
                         y_coords = [pt[1] for pt in bbox]
                     else:
-                        # bbox is [x1, y1, x2, y2]
                         y_coords = [bbox[1], bbox[3]]
                     y_center = sum(y_coords) / len(y_coords)
-                    
-                    if y_center <= max_y_threshold:
-                        filtered.append(det)
-                else:
-                    filtered.append(det)
+                    y_height = max(y_coords) - min(y_coords)
+                    return y_center, y_height
             except (TypeError, IndexError):
+                pass
+            return None, None
+        
+        # First pass: vertical position filter
+        filtered = []
+        for det in detections:
+            y_center, y_height = _get_bbox_info(det)
+            if y_center is None:
+                filtered.append(det)  # Keep if no bbox info
+                continue
+            if y_center <= max_y_threshold:
                 filtered.append(det)
         
-        return filtered if filtered else detections  # Fallback to all if filter removes everything
+        if filtered:
+            return filtered
+        
+        # Second pass (fallback): if vertical filter removed everything,
+        # find the tallest detection (plate text) and keep only detections
+        # whose vertical center is within the same band
+        det_info = []
+        for det in detections:
+            y_center, y_height = _get_bbox_info(det)
+            if y_center is not None and y_height is not None:
+                det_info.append((det, y_center, y_height))
+            else:
+                det_info.append((det, 0, 0))
+        
+        if det_info:
+            # The tallest text is most likely the plate number
+            tallest = max(det_info, key=lambda x: x[2])
+            tallest_y = tallest[1]
+            tallest_h = tallest[2]
+            
+            # Keep detections that overlap vertically with the tallest one
+            band_filtered = []
+            for det, y_center, y_height in det_info:
+                if y_center is None or abs(y_center - tallest_y) <= tallest_h * 0.8:
+                    band_filtered.append(det)
+            
+            if band_filtered:
+                return band_filtered
+        
+        return detections  # Ultimate fallback: return all
     
     def read_batch(self, images, preprocess=True):
         """

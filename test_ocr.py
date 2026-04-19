@@ -47,7 +47,7 @@ for i, r in enumerate(results):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         
         # Expand bounding box slightly (YOLO often cuts off the edges of plates)
-        pad = 5
+        pad = 10
         img_h, img_w = image.shape[:2]
         crop_x1 = max(0, x1 - pad)
         crop_y1 = max(0, y1 - pad)
@@ -60,7 +60,13 @@ for i, r in enumerate(results):
         # Save the exact crop being sent to OCR so we can see what the AI is looking at
         cv2.imwrite(f"debug_crop_{j}.jpg", plate_crop)
         
-        # Run OCR on the crop (using our new smart padding/scaling pipeline)
+        # Also save preprocessed versions for debugging
+        debug_color = ocr_system.preprocess_plate(plate_crop.copy())
+        debug_binary = ocr_system.preprocess_plate_binary(plate_crop.copy())
+        cv2.imwrite(f"debug_color_{j}.jpg", debug_color)
+        cv2.imwrite(f"debug_binary_{j}.jpg", debug_binary)
+        
+        # Run OCR on the crop (multi-attempt: color + binary)
         ocr_result = ocr_system.read_plate(plate_crop)
         
         plate_text = ocr_result.get('text', '')
