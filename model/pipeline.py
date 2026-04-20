@@ -373,9 +373,9 @@ class VehicleRecognitionPipeline:
             # Vehicle bounding box (cyan)
             draw.rectangle([x1, y1, x2, y2], outline='#00E5FF', width=2)
             
-            # Car model label
-            car_label = v.get('car_make_model', 'Unknown')
-            car_conf = v.get('car_confidence', 0)
+            # Car model label — prefer CLIP/brand over raw classifier class
+            car_label = v.get('clip_brand') or v.get('brand') or 'Unknown'
+            car_conf = v.get('clip_brand_confidence') or v.get('brand_confidence') or 0
             label = f"{car_label} ({car_conf:.0%})"
             
             text_bbox = draw.textbbox((x1, y1 - 18), label, font=font)

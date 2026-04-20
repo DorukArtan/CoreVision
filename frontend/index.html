@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vehicle Recognition AI — Model Classification & Plate Reader</title>
-    <meta name="description" content="Multi-task AI for vehicle model classification and license plate recognition. Upload a car photo to identify the model and read the plate.">
+    <title>CoreVision — Vehicle Recognition & License Plate Reader</title>
+    <meta name="description" content="AI-powered vehicle recognition system. Identify car brands, models, read license plates, and detect country of origin from images and videos.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -20,10 +20,10 @@
     <header class="header">
         <div class="header-inner">
             <div class="logo">
-                <span class="logo-icon">🚗</span>
+                <span class="logo-icon">🔍</span>
                 <div>
-                    <h1 class="logo-title">VehicleAI</h1>
-                    <p class="logo-subtitle">Multi-Task Recognition Network</p>
+                    <h1 class="logo-title">CoreVision</h1>
+                    <p class="logo-subtitle">Vehicle Recognition & Plate Reader</p>
                 </div>
             </div>
             <div class="header-badge">
@@ -38,6 +38,26 @@
         <!-- Upload Section -->
         <section class="upload-section" id="uploadSection">
             <div class="upload-card glass-card">
+                <!-- Media Type Tabs -->
+                <div class="media-tabs">
+                    <button class="media-tab active" id="tabImage" data-type="image">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <polyline points="21 15 16 10 5 21"/>
+                        </svg>
+                        Image
+                    </button>
+                    <button class="media-tab" id="tabVideo" data-type="video">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="23 7 16 12 23 17 23 7"/>
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                        </svg>
+                        Video
+                    </button>
+                </div>
+
+                <!-- Upload Zone -->
                 <div class="upload-zone" id="uploadZone">
                     <div class="upload-icon-container">
                         <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -45,16 +65,18 @@
                             <path d="M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h2 class="upload-title">Upload Vehicle Image</h2>
-                    <p class="upload-desc">Drag & drop a car photo here, or click to browse</p>
-                    <p class="upload-formats">Supports JPG, PNG, WEBP — Max 10MB</p>
+                    <h2 class="upload-title" id="uploadTitle">Upload Vehicle Image</h2>
+                    <p class="upload-desc" id="uploadDesc">Drag & drop a car photo here, or click to browse</p>
+                    <p class="upload-formats" id="uploadFormats">Supports JPG, PNG, WEBP — Max 10MB</p>
                     <input type="file" id="fileInput" accept="image/*" hidden>
                 </div>
 
-                <!-- Image Preview -->
+                <!-- Media Preview -->
                 <div class="preview-container" id="previewContainer" style="display: none;">
-                    <img id="previewImage" class="preview-image" alt="Uploaded car image">
-                    <button class="btn-remove" id="btnRemove" title="Remove image">✕</button>
+                    <img id="previewImage" class="preview-image" alt="Uploaded image" style="display: none;">
+                    <video id="previewVideo" class="preview-image" controls style="display: none;"></video>
+                    <div class="preview-file-info" id="previewFileInfo"></div>
+                    <button class="btn-remove" id="btnRemove" title="Remove file">✕</button>
                 </div>
 
                 <!-- Analyze Button -->
@@ -67,10 +89,10 @@
             </div>
         </section>
 
-        <!-- Results Section -->
+        <!-- Results Section — Image -->
         <section class="results-section" id="resultsSection" style="display: none;">
             <!-- Annotated Image -->
-            <div class="result-card glass-card image-result">
+            <div class="result-card glass-card image-result" id="annotatedCard" style="display: none;">
                 <h3 class="result-card-title">
                     <span class="result-icon">🖼️</span> Detection Result
                 </h3>
@@ -79,47 +101,29 @@
                 </div>
             </div>
 
-            <!-- Vehicle Model Result -->
-            <div class="result-card glass-card">
-                <h3 class="result-card-title">
-                    <span class="result-icon">🚗</span> Vehicle Model
-                </h3>
-                <div class="result-main" id="vehicleResult">
-                    <span class="result-value" id="vehicleModel">—</span>
-                    <div class="confidence-bar-container">
-                        <div class="confidence-bar" id="vehicleConfBar"></div>
+            <!-- Summary Stats -->
+            <div class="result-card glass-card stats-card" id="statsCard">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-value" id="statVehicles">0</span>
+                        <span class="stat-label">Vehicles</span>
                     </div>
-                    <span class="confidence-text" id="vehicleConf">0%</span>
-                </div>
-
-                <!-- Top 5 Predictions -->
-                <div class="top5-container" id="top5Container">
-                    <h4 class="top5-title">Top 5 Predictions</h4>
-                    <ul class="top5-list" id="top5List"></ul>
-                </div>
-            </div>
-
-            <!-- License Plate Result -->
-            <div class="result-card glass-card">
-                <h3 class="result-card-title">
-                    <span class="result-icon">🔤</span> License Plate
-                </h3>
-                <div class="plate-result">
-                    <div class="plate-display" id="plateDisplay">
-                        <span class="plate-text" id="plateText">—</span>
+                    <div class="stat-item">
+                        <span class="stat-value" id="statPlates">0</span>
+                        <span class="stat-label">Plates</span>
                     </div>
-                    <div class="plate-details">
-                        <div class="detail-item">
-                            <span class="detail-label">Confidence</span>
-                            <span class="detail-value" id="plateConf">—</span>
-                        </div>
-                        <div class="detail-item">
-                            <span class="detail-label">Bbox</span>
-                            <span class="detail-value" id="plateBbox">—</span>
-                        </div>
+                    <div class="stat-item" id="statFramesItem" style="display: none;">
+                        <span class="stat-value" id="statFrames">0</span>
+                        <span class="stat-label">Frames</span>
                     </div>
                 </div>
             </div>
+
+            <!-- Dynamic Vehicle Cards Container -->
+            <div id="vehiclesContainer"></div>
+
+            <!-- Standalone Plates (not associated with a vehicle) -->
+            <div id="standalonePlatesContainer"></div>
 
             <!-- New Analysis Button -->
             <button class="btn-new" id="btnNew">
@@ -130,8 +134,8 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <p>Multi-Task AI Network — Vehicle Model Classification & License Plate Recognition</p>
-        <p class="footer-sub">Built with PyTorch • EfficientNet-B0 • EasyOCR • FastAPI</p>
+        <p>CoreVision — AI-Powered Vehicle Recognition & License Plate Reader</p>
+        <p class="footer-sub">Built with PyTorch • EfficientNetV2 • CLIP • PaddleOCR • YOLOv8 • FastAPI</p>
     </footer>
 
     <script src="/static/script.js"></script>

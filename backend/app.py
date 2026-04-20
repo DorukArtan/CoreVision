@@ -107,9 +107,15 @@ async def predict_image(file: UploadFile = File(...)):
             vehicle_clean['plates'] = plates_clean
             vehicles.append(vehicle_clean)
 
+        # Clean standalone plates too
+        standalone_plates = []
+        for p in result.get('standalone_plates', []):
+            standalone_plates.append({k: val for k, val in p.items() if k != 'crop'})
+
         return JSONResponse(content={
             "success": True,
             "vehicles": vehicles,
+            "standalone_plates": standalone_plates,
             "total_vehicles": result.get('total_vehicles', 0),
             "total_plates": result.get('total_plates', 0),
             "annotated_image": annotated_b64,
