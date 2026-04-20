@@ -485,11 +485,10 @@ function createVehicleCard(vehicle, idx) {
     }
     
     if (brands.length > 0) {
-        // Show the best brand as the main heading
-        const bestBrand = vehicle.clip_brand || vehicle.brand || 'Unknown';
-        const bestConf = vehicle.clip_brand ? vehicle.clip_brand_confidence : vehicle.brand_confidence;
-        const bestConfPct = bestConf ? Math.round(bestConf * 100) : 0;
-        html += `<div class="model-name">${escapeHtml(formatModelName(bestBrand))}</div>`;
+        // Show the highest confidence brand as the main heading
+        const best = brands.reduce((a, b) => (b.conf || 0) > (a.conf || 0) ? b : a);
+        const bestConfPct = best.conf ? Math.round(best.conf * 100) : 0;
+        html += `<div class="model-name">${escapeHtml(formatModelName(best.name))}</div>`;
         html += `
             <div class="confidence-row">
                 <div class="confidence-bar-container">
@@ -644,8 +643,23 @@ function formatModelName(name) {
  * Convert a 2-letter country code to flag emoji.
  */
 function countryCodeToFlag(code) {
-    if (!code || code.length !== 2) return '🏳️';
-    const codePoints = [...code.toUpperCase()].map(
+    // Map vehicle registration codes to ISO 3166-1 alpha-2 for flag emoji
+    const regToIso = {
+        'D': 'DE', 'F': 'FR', 'I': 'IT', 'E': 'ES', 'A': 'AT', 'B': 'BE',
+        'H': 'HU', 'L': 'LU', 'M': 'MT', 'N': 'NO', 'P': 'PT', 'S': 'SE',
+        'V': 'VA', 'J': 'JP', 'T': 'TH', 'Q': 'QA',
+        'RUS': 'RU', 'USA': 'US', 'CDN': 'CA', 'MEX': 'MX', 'AUS': 'AU',
+        'IND': 'IN', 'ROK': 'KR', 'IRL': 'IE', 'EST': 'EE', 'FIN': 'FI',
+        'SLO': 'SI', 'SRB': 'RS', 'BIH': 'BA', 'MNE': 'ME', 'MK': 'MK',
+        'FL': 'LI', 'AND': 'AD', 'RSM': 'SM', 'RCH': 'CL', 'RA': 'AR',
+        'RI': 'ID', 'RP': 'PH', 'VN': 'VN', 'EAK': 'KE', 'EAU': 'UG',
+        'IRQ': 'IQ', 'SYR': 'SY', 'KWT': 'KW', 'BRN': 'BH', 'OM': 'OM',
+        'UAE': 'AE', 'EU': 'EU',
+    };
+    if (!code) return '🏳️';
+    const iso = regToIso[code.toUpperCase()] || code.toUpperCase();
+    if (iso.length !== 2) return '🏳️';
+    const codePoints = [...iso].map(
         c => 0x1F1E6 + c.charCodeAt(0) - 65
     );
     return String.fromCodePoint(...codePoints);

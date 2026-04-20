@@ -6,7 +6,7 @@ Identifies the country of origin from a license plate using:
 2. Regex pattern matching against known plate formats
 3. Country code lookup table
 
-Covers 60+ countries with confidence scoring.
+Covers Europe, Turkey, and Turkey's neighboring countries.
 """
 
 import re
@@ -16,6 +16,7 @@ from PIL import Image
 
 # ============================================================
 # Country Code Lookup: International Vehicle Registration Codes
+# Scope: Europe + Turkey + Turkey's neighbors
 # ============================================================
 COUNTRY_CODES = {
     # Europe
@@ -32,21 +33,8 @@ COUNTRY_CODES = {
     'RO': 'Romania', 'RSM': 'San Marino', 'RUS': 'Russia', 'S': 'Sweden',
     'SK': 'Slovakia', 'SLO': 'Slovenia', 'SRB': 'Serbia', 'TR': 'Turkey',
     'UA': 'Ukraine', 'V': 'Vatican City',
-    # Americas
-    'USA': 'United States', 'CDN': 'Canada', 'MEX': 'Mexico',
-    'BR': 'Brazil', 'RA': 'Argentina', 'RCH': 'Chile', 'CO': 'Colombia',
-    'PE': 'Peru', 'EC': 'Ecuador', 'VE': 'Venezuela',
-    # Asia & Middle East
-    'CN': 'China', 'J': 'Japan', 'ROK': 'South Korea', 'IND': 'India',
-    'PK': 'Pakistan', 'MY': 'Malaysia', 'RI': 'Indonesia', 'T': 'Thailand',
-    'VN': 'Vietnam', 'RP': 'Philippines', 'IR': 'Iran', 'IL': 'Israel',
-    'SA': 'Saudi Arabia', 'UAE': 'United Arab Emirates', 'KWT': 'Kuwait',
-    'BRN': 'Bahrain', 'Q': 'Qatar', 'OM': 'Oman',
-    # Africa
-    'ZA': 'South Africa', 'ET': 'Egypt', 'MA': 'Morocco', 'TN': 'Tunisia',
-    'DZ': 'Algeria', 'NG': 'Nigeria', 'EAK': 'Kenya', 'EAU': 'Uganda',
-    # Oceania
-    'AUS': 'Australia', 'NZ': 'New Zealand',
+    # Turkey's neighbors (non-European)
+    'IR': 'Iran', 'IRQ': 'Iraq', 'SYR': 'Syria',
 }
 
 
@@ -56,58 +44,126 @@ COUNTRY_CODES = {
 # Each entry: (compiled_regex, country, confidence_boost)
 PLATE_PATTERNS = [
     # Turkey: 06 ABC 1234 or 34 AB 123
-    (re.compile(r'^\d{2}\s?[A-Z]{1,3}\s?\d{2,4}$'), 'Turkey', 0.9),
+    (re.compile(r'^\d{2}\s?[A-Z]{1,3}\s?\d{2,4}$'), 'Turkey', 'TR', 0.9),
     
     # Germany: XX-XX 1234 or X-XX 1234
-    (re.compile(r'^[A-Z]{1,3}\s?-?\s?[A-Z]{1,2}\s?\d{1,4}$'), 'Germany', 0.7),
+    (re.compile(r'^[A-Z]{1,3}\s?-?\s?[A-Z]{1,2}\s?\d{1,4}[EH]?$'), 'Germany', 'D', 0.7),
     
     # France: AA-123-AA
-    (re.compile(r'^[A-Z]{2}\s?-?\s?\d{3}\s?-?\s?[A-Z]{2}$'), 'France', 0.9),
+    (re.compile(r'^[A-Z]{2}\s?-?\s?\d{3}\s?-?\s?[A-Z]{2}$'), 'France', 'F', 0.9),
     
     # UK: AA12 ABC
-    (re.compile(r'^[A-Z]{2}\d{2}\s?[A-Z]{3}$'), 'United Kingdom', 0.9),
+    (re.compile(r'^[A-Z]{2}\d{2}\s?[A-Z]{3}$'), 'United Kingdom', 'GB', 0.9),
     
-    # Netherlands: XX-999-X or 99-XXX-9
-    (re.compile(r'^[A-Z0-9]{2}\s?-?\s?[A-Z0-9]{3}\s?-?\s?[A-Z0-9]{1,2}$'), 'Netherlands', 0.6),
+    # Netherlands: X-999-XX, XX-999-X, 99-XXX-9, 9-XXX-99, XX-XX-99 etc.
+    (re.compile(r'^[A-Z]{1,2}\s?-\s?\d{3}\s?-\s?[A-Z]{1,2}$'), 'Netherlands', 'NL', 0.92),
+    (re.compile(r'^\d{1,2}\s?-\s?[A-Z]{3}\s?-\s?\d{1,2}$'), 'Netherlands', 'NL', 0.92),
+    (re.compile(r'^[A-Z]{2}\s?-\s?[A-Z]{2}\s?-\s?\d{2}$'), 'Netherlands', 'NL', 0.88),
+    (re.compile(r'^\d{2}\s?-\s?[A-Z]{2}\s?-\s?[A-Z]{2}$'), 'Netherlands', 'NL', 0.88),
+    (re.compile(r'^[A-Z]{2}\s?-\s?\d{2}\s?-\s?[A-Z]{2}$'), 'Netherlands', 'NL', 0.88),
+    # Fallback: generic 3-segment sidecode with hyphens
+    (re.compile(r'^[A-Z0-9]{1,3}\s?-\s?[A-Z0-9]{2,3}\s?-\s?[A-Z0-9]{1,3}$'), 'Netherlands', 'NL', 0.6),
+    
+    # Belgium: 1-ABC-234
+    (re.compile(r'^\d\s?-?\s?[A-Z]{3}\s?-?\s?\d{3}$'), 'Belgium', 'B', 0.9),
     
     # Italy: AA 123 AA
-    (re.compile(r'^[A-Z]{2}\s?\d{3}\s?[A-Z]{2}$'), 'Italy', 0.8),
+    (re.compile(r'^[A-Z]{2}\s?\d{3}\s?[A-Z]{2}$'), 'Italy', 'I', 0.8),
     
     # Spain: 1234 ABC
-    (re.compile(r'^\d{4}\s?[A-Z]{3}$'), 'Spain', 0.9),
+    (re.compile(r'^\d{4}\s?[A-Z]{3}$'), 'Spain', 'E', 0.9),
     
-    # Poland: ABC 12345
-    (re.compile(r'^[A-Z]{2,3}\s?\d{4,5}$'), 'Poland', 0.7),
+    # Poland: ABC 12345 or ABC1234
+    (re.compile(r'^[A-Z]{2,3}\s?\d{4,5}$'), 'Poland', 'PL', 0.7),
+    (re.compile(r'^[A-Z]{2}\s?\d{5}$'), 'Poland', 'PL', 0.8),
     
-    # Russia: A123AA 77
-    (re.compile(r'^[A-Z]\d{3}[A-Z]{2}\s?\d{2,3}$'), 'Russia', 0.9),
+    # Russia: A123AA 77 or A123AA 777
+    (re.compile(r'^[ABEKMHOPCTYX]\d{3}[ABEKMHOPCTYX]{2}\s?\d{2,3}$'), 'Russia', 'RUS', 0.95),
+    (re.compile(r'^[A-Z]\d{3}[A-Z]{2}\s?\d{2,3}$'), 'Russia', 'RUS', 0.85),
     
-    # USA: Various state formats, generally alphanumeric
-    (re.compile(r'^[A-Z0-9]{1,3}\s?-?\s?[A-Z0-9]{3,4}$'), 'United States', 0.4),
+    # Austria: W-12345A or AB-12345
+    (re.compile(r'^[A-Z]{1,2}\s?-?\s?\d{3,5}\s?[A-Z]?$'), 'Austria', 'A', 0.5),
     
-    # Saudi Arabia: Arabic + digits
-    (re.compile(r'^\d{1,4}\s?[A-Z]{1,3}$'), 'Saudi Arabia', 0.5),
+    # Sweden: ABC 123 or ABC 12A
+    (re.compile(r'^[A-Z]{3}\s?\d{2}[A-Z0-9]$'), 'Sweden', 'S', 0.8),
     
-    # UAE: Letter(s) + digits
-    (re.compile(r'^[A-Z]{1,2}\s?\d{1,5}$'), 'United Arab Emirates', 0.5),
+    # Denmark: AB 12 345 or AB12345
+    (re.compile(r'^[A-Z]{2}\s?\d{2}\s?\d{3}$'), 'Denmark', 'DK', 0.7),
     
-    # Brazil: ABC1D23 (Mercosur) or ABC-1234 (old)
-    (re.compile(r'^[A-Z]{3}\s?-?\s?\d[A-Z]\d{2}$'), 'Brazil', 0.9),
-    (re.compile(r'^[A-Z]{3}\s?-?\s?\d{4}$'), 'Brazil', 0.8),
+    # Norway: AB 12345
+    (re.compile(r'^[A-Z]{2}\s?\d{5}$'), 'Norway', 'N', 0.8),
     
-    # Japan: Region + hiragana + 4 digits
-    (re.compile(r'^\d{2,4}\s?[A-Z]\s?\d{2}\s?-?\s?\d{2}$'), 'Japan', 0.6),
+    # Portugal: AA-12-AA or 12-AA-12 or AA-12-12
+    (re.compile(r'^[A-Z]{2}\s?-?\s?\d{2}\s?-?\s?[A-Z]{2}$'), 'Portugal', 'P', 0.7),
+    (re.compile(r'^\d{2}\s?-?\s?[A-Z]{2}\s?-?\s?\d{2}$'), 'Portugal', 'P', 0.7),
     
-    # South Korea: 12가 1234
-    (re.compile(r'^\d{2,3}\s?[A-Z가-힣]\s?\d{4}$'), 'South Korea', 0.8),
+    # Czech Republic: 1A2 3456
+    (re.compile(r'^\d[A-Z]\d\s?\d{4}$'), 'Czech Republic', 'CZ', 0.85),
     
-    # India: KA01AB1234
-    (re.compile(r'^[A-Z]{2}\s?\d{2}\s?[A-Z]{1,2}\s?\d{4}$'), 'India', 0.9),
+    # Romania: B-123-ABC or AB-12-ABC
+    (re.compile(r'^[A-Z]{1,2}\s?-?\s?\d{2,3}\s?-?\s?[A-Z]{3}$'), 'Romania', 'RO', 0.7),
     
-    # Australia: various state formats
-    (re.compile(r'^[A-Z]{3}\s?\d{3}$'), 'Australia', 0.5),
-    (re.compile(r'^\d{3}\s?[A-Z]{3}$'), 'Australia', 0.5),
+    # Greece: AAA-1234
+    (re.compile(r'^[A-Z]{3}\s?-?\s?\d{4}$'), 'Greece', 'GR', 0.7),
+    
+    # Switzerland: AG 123456 or ZH 1234
+    (re.compile(r'^[A-Z]{2}\s?\d{4,6}$'), 'Switzerland', 'CH', 0.6),
+    
+    # Croatia: ZG-1234-AA
+    (re.compile(r'^[A-Z]{2}\s?-?\s?\d{3,4}\s?-?\s?[A-Z]{1,2}$'), 'Croatia', 'HR', 0.7),
+    
+    # Hungary: AAA-123
+    (re.compile(r'^[A-Z]{3}\s?-?\s?\d{3}$'), 'Hungary', 'H', 0.6),
+    
+    # Bulgaria: A 1234 AB
+    (re.compile(r'^[A-Z]{1,2}\s?\d{4}\s?[A-Z]{2}$'), 'Bulgaria', 'BG', 0.8),
+    
+    # Finland: ABC-123
+    (re.compile(r'^[A-Z]{3}\s?-\s?\d{3}$'), 'Finland', 'FIN', 0.85),
+    
+    # --- Turkey's neighbors ---
+    
+    # Georgia: AA-123-AAA or AA-1234 (region code + digits + letters)
+    (re.compile(r'^[A-Z]{2}\s?-?\s?\d{3}\s?-?\s?[A-Z]{3}$'), 'Georgia', 'GE', 0.85),
+    (re.compile(r'^[A-Z]{3}\s?-?\s?\d{3}\s?-?\s?[A-Z]{2}$'), 'Georgia', 'GE', 0.8),
+    
+    # Armenia: 12 AA 123 (digits-letters-digits)
+    (re.compile(r'^\d{2}\s?[A-Z]{2}\s?\d{3}$'), 'Armenia', 'AM', 0.9),
+    
+    # Azerbaijan: 12-AA-123 or 12 AA 123 (region-letters-digits)
+    (re.compile(r'^\d{2}\s?-?\s?[A-Z]{2}\s?-?\s?\d{3}$'), 'Azerbaijan', 'AZ', 0.85),
+    # Older Azerbaijan format: A 1234 AA
+    (re.compile(r'^[A-Z]\s?\d{4}\s?[A-Z]{2}$'), 'Azerbaijan', 'AZ', 0.75),
+    
+    # Iran: 12 A 123 | IR 12 (2 digits, letter, 3 digits, region code)
+    # OCR usually reads: 12A12345 or "12 A 123 45"
+    (re.compile(r'^\d{2}\s?[A-Z]\s?\d{3}\s?\d{2}$'), 'Iran', 'IR', 0.9),
+    (re.compile(r'^\d{2}[A-Z]\d{5}$'), 'Iran', 'IR', 0.85),
+    
+    # Iraq: 1234 A (digits + province letter) or region-specific formats
+    (re.compile(r'^\d{4,5}\s?[A-Z]{1,3}$'), 'Iraq', 'IRQ', 0.7),
+    (re.compile(r'^[A-Z]{1,3}\s?\d{4,5}$'), 'Iraq', 'IRQ', 0.6),
+    
+    # Syria: 123456 or 12-12345 (purely numeric or region-digits)
+    (re.compile(r'^\d{6}$'), 'Syria', 'SYR', 0.6),
+    (re.compile(r'^\d{2}\s?-?\s?\d{5}$'), 'Syria', 'SYR', 0.65),
+    
+    # Cyprus: ABC 123 or AAA 123 (EU member, has blue strip)
+    (re.compile(r'^[A-Z]{3}\s?\d{3}$'), 'Cyprus', 'CY', 0.7),
+    
+    # Ukraine: AA 1234 AA (2 letters, 4 digits, 2 letters)
+    (re.compile(r'^[A-Z]{2}\s?\d{4}\s?[A-Z]{2}$'), 'Ukraine', 'UA', 0.9),
+    # Older: A 1234 AA
+    (re.compile(r'^[A-Z]\s?\d{4}\s?[A-Z]{2}$'), 'Ukraine', 'UA', 0.8),
+    
 ]
+
+# EU member state codes (for narrowing "EU" to a specific country)
+EU_MEMBER_CODES = {
+    'A', 'B', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EST', 'FIN', 'F', 'D', 'GR',
+    'H', 'IRL', 'I', 'LV', 'LT', 'L', 'M', 'NL', 'PL', 'P', 'RO', 'SK',
+    'SLO', 'E', 'S',
+}
 
 
 class CountryIdentifier:
@@ -118,6 +174,9 @@ class CountryIdentifier:
     1. EU blue strip detection (visual)
     2. Country code extraction from plate text
     3. Plate format pattern matching
+    
+    When an EU blue strip is detected, the identifier tries to narrow down
+    the specific EU member state using plate format patterns and country codes.
     
     Usage:
         identifier = CountryIdentifier()
@@ -142,12 +201,14 @@ class CountryIdentifier:
                 'all_matches': list of all candidate matches
         """
         candidates = []
+        has_eu_strip = False
         
         # Method 1: Check for EU blue strip (visual)
         if plate_image is not None:
             eu_result = self._detect_eu_strip(plate_image)
             if eu_result:
-                candidates.append(eu_result)
+                has_eu_strip = True
+                # Keep as fallback, but don't add yet — try to find specific country first
         
         # Method 2: Country code in plate text
         if plate_text:
@@ -159,6 +220,14 @@ class CountryIdentifier:
         if plate_text:
             pattern_results = self._match_plate_format(plate_text)
             candidates.extend(pattern_results)
+        
+        # If EU strip was detected, boost confidence of any EU member state match
+        if has_eu_strip and candidates:
+            for c in candidates:
+                if c.get('country_code', '') in EU_MEMBER_CODES:
+                    # EU strip confirms it's a European plate — boost confidence
+                    c['confidence'] = min(1.0, c['confidence'] + 0.15)
+                    c['method'] = c['method'] + '+eu_strip'
         
         # Select best candidate
         if candidates:
@@ -172,6 +241,16 @@ class CountryIdentifier:
                 'confidence': round(best['confidence'], 4),
                 'method': best['method'],
                 'all_matches': candidates[:5]
+            }
+        
+        # If we only have EU strip with no specific country, use that as fallback
+        if has_eu_strip:
+            return {
+                'country': 'European Union (member state)',
+                'country_code': 'EU',
+                'confidence': round(eu_result['confidence'], 4),
+                'method': 'eu_blue_strip',
+                'all_matches': [eu_result]
             }
         
         return {
@@ -270,15 +349,8 @@ class CountryIdentifier:
         text = plate_text.strip().upper()
         matches = []
         
-        for pattern, country, confidence in PLATE_PATTERNS:
+        for pattern, country, code, confidence in PLATE_PATTERNS:
             if pattern.match(text):
-                # Find country code
-                code = ''
-                for c, name in COUNTRY_CODES.items():
-                    if name == country:
-                        code = c
-                        break
-                
                 matches.append({
                     'country': country,
                     'country_code': code,
