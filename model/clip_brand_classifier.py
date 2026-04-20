@@ -37,11 +37,11 @@ class CLIPBrandClassifier:
     """
     
     # CLIP model choices (speed vs accuracy trade-off):
-    # - ViT-B-32: fastest, good enough for brand classification (~400MB)
-    # - ViT-B-16: better accuracy, slower (~600MB)
+    # - ViT-B-32: fastest, lower accuracy (~400MB)
+    # - ViT-B-16: good balance of accuracy and speed (~600MB)
     # - ViT-L-14: best accuracy, slowest (~900MB)
-    DEFAULT_MODEL = 'ViT-B-32'
-    DEFAULT_PRETRAINED = 'laion2b_s34b_b79k'
+    DEFAULT_MODEL = 'ViT-B-16'
+    DEFAULT_PRETRAINED = 'laion2b_s34b_b88k'
     
     def __init__(self, brand_list_path=None, brands=None,
                  model_name=None, pretrained=None, device=None):
@@ -120,6 +120,10 @@ class CLIPBrandClassifier:
             "a {} vehicle",
             "a {} automobile",
             "a photo of a {} vehicle on the road",
+            "a {} brand car front view",
+            "a {} car with {} logo on the grille",
+            "a {} car with its badge visible",
+            "front view of a {} branded car",
         ]
         
         all_features = []
@@ -127,7 +131,7 @@ class CLIPBrandClassifier:
         with torch.no_grad():
             for brand in self.brands:
                 # Create text prompts from templates
-                texts = [t.format(brand) for t in templates]
+                texts = [t.format(brand, brand) if '{}' in t[t.index('}')+1:] else t.format(brand) for t in templates]
                 tokens = self.tokenizer(texts).to(self.device)
                 
                 # Encode and average (prompt ensembling)
@@ -172,7 +176,7 @@ class CLIPBrandClassifier:
             
             # Cosine similarity → softmax probabilities
             similarity = (image_features @ self._text_features.T).squeeze(0)
-            probs = torch.softmax(similarity * 100, dim=0)  # temperature scaling
+            probs = torch.softmax(similarity * 50, dim=0)  # temperature scaling (lower = less overconfident)
         
         # Top-k predictions
         top_probs, top_indices = probs.topk(min(top_k, len(self.brands)))
