@@ -656,9 +656,41 @@ body {
     color: var(--cyan);
 }
 
+.brand-badge.model {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    color: var(--emerald);
+}
+
 .brand-badge-label {
     opacity: 0.7;
     font-weight: 500;
+}
+
+.submatches-title {
+    margin-top: 10px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+}
+
+.submatches-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.submatch-item {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 8px;
+    padding: 6px 10px;
+    word-break: break-word;
 }
 
 /* Top K Predictions */

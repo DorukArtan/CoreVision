@@ -210,16 +210,21 @@ class CountryIdentifier:
                 has_eu_strip = True
                 # Keep as fallback, but don't add yet — try to find specific country first
         
-        # Method 2: Country code in plate text
-        if plate_text:
-            code_result = self._check_country_code(plate_text)
-            if code_result:
-                candidates.append(code_result)
-        
-        # Method 3: Plate format pattern matching
+        # Method 2: Plate format pattern matching (run FIRST — higher structural confidence)
+        pattern_results = []
         if plate_text:
             pattern_results = self._match_plate_format(plate_text)
             candidates.extend(pattern_results)
+        
+        # Method 3: Country code token in plate text
+        # Skip if a high-confidence format pattern already identified a country —
+        # this prevents tokens like 'AL' in '06 AL 4675' (Turkish) from being
+        # misread as country codes (e.g. Albania).
+        best_pattern_conf = max((r['confidence'] for r in pattern_results), default=0.0)
+        if plate_text and best_pattern_conf < 0.85:
+            code_result = self._check_country_code(plate_text)
+            if code_result:
+                candidates.append(code_result)
         
         # If EU strip was detected, boost confidence of any EU member state match
         if has_eu_strip and candidates:
@@ -311,6 +316,10 @@ class CountryIdentifier:
         - Prefix codes: "PL WZY54495"
         - Suffix codes: "WZY54495 PL"
         - Separated forms with hyphen/space: "TR-34ABC123"
+
+        Tokens that are sandwiched between two numeric-only tokens are skipped
+        because they are almost certainly part of the plate number itself
+        (e.g. 'AL' in the Turkish plate '06 AL 4675').
         """
         text = plate_text.strip().upper()
 
@@ -319,8 +328,14 @@ class CountryIdentifier:
         tokens = [t for t in re.split(r'\s+', normalized) if t]
 
         # Check tokens first (most reliable for OCR outputs like "PL WZY54495").
-        for token in tokens:
+        for i, token in enumerate(tokens):
             if token in COUNTRY_CODES:
+                # Skip if the token is sandwiched between digit-only tokens —
+                # it is clearly an internal plate segment, not a country code.
+                prev_is_digit = (i > 0 and tokens[i - 1].isdigit())
+                next_is_digit = (i < len(tokens) - 1 and tokens[i + 1].isdigit())
+                if prev_is_digit and next_is_digit:
+                    continue
                 return {
                     'country': COUNTRY_CODES[token],
                     'country_code': token,

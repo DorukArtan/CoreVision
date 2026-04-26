@@ -29,6 +29,7 @@ from model.video_processor import VideoProcessor
 from model.detector import VehiclePlateDetector
 from model.car_classifier import CarClassifier
 from model.clip_brand_classifier import CLIPBrandClassifier
+from model.model_sub_classifier import BrandSubClassifierRouter
 from model.plate_ocr import PlateOCR
 from model.country_identifier import CountryIdentifier
 
@@ -209,6 +210,22 @@ class VehicleRecognitionPipeline:
         else:
             self.brand_classifier = None
             print("Brand classifier not available (brand_classifier_best.pth or test_cars.txt missing)")
+
+        # Brand-specific model classifiers (e.g. Audi -> A3/A4/A6)
+        sub_weights_dir = os.path.join(PROJECT_ROOT, 'weights')
+        try:
+            self.brand_sub_classifier = BrandSubClassifierRouter(
+                weights_dir=sub_weights_dir,
+                device=device
+            )
+            available = self.brand_sub_classifier.available_brands()
+            if available:
+                print(f"Brand sub-classifiers ready ({len(available)} brands)")
+            else:
+                print("Brand sub-classifiers not found in weights directory")
+        except Exception as e:
+            self.brand_sub_classifier = None
+            print(f"Brand sub-classifiers failed to load: {e}")
         
         # CLIP zero-shot classifier (additional fallback for unknown brands)
         if clip_brand_list is None:
@@ -279,6 +296,39 @@ class VehicleRecognitionPipeline:
                     result['clip_brand'] = clip_result['brand']
                     result['clip_brand_confidence'] = clip_result['confidence']
                     result['clip_brand_top_k'] = clip_result['top_k']
+
+                # Brand-specific model classifier (strict routing):
+                # only run the small model for the top-1 brand predicted by
+                # brand_classifier_best.pth. Do not use CLIP/top-k brands.
+                if self.brand_sub_classifier is not None:
+                    routing_brand = result.get('brand')
+                    if routing_brand and self.brand_sub_classifier.has_brand(routing_brand):
+                        sub_result = self.brand_sub_classifier.predict(
+                            image=vehicle['crop'],
+                            brand=routing_brand,
+                            top_k=3
+                        )
+                        if sub_result.get('available'):
+                            result['brand_model'] = sub_result.get('make_model')
+                            result['brand_model_confidence'] = sub_result.get('confidence')
+                            result['brand_model_top_k'] = sub_result.get('top_k')
+                            result['brand_model_brand'] = sub_result.get('brand')
+                            result['brand_subclassifier_results'] = [
+                                {
+                                    'brand': sub_result.get('brand'),
+                                    'make_model': sub_result.get('make_model'),
+                                    'confidence': sub_result.get('confidence'),
+                                    'top_k': sub_result.get('top_k'),
+                                    'weights_path': sub_result.get('weights_path'),
+                                    'source': 'brand_top1',
+                                    'source_confidence': result.get('brand_confidence'),
+                                }
+                            ]
+                            # Explicit third output for API/UI consumers
+                            result['model'] = sub_result.get('make_model')
+                            result['model_confidence'] = sub_result.get('confidence')
+                            result['model_brand'] = sub_result.get('brand')
+                            result['model_source'] = 'brand_sub_classifier'
             
             # Find associated plates
             associated_plates = [
@@ -481,6 +531,13 @@ class VehicleRecognitionPipeline:
             else:
                 car_label = 'Unknown'
                 car_conf = 0
+
+            # If we have a brand-specific model prediction, prefer showing it.
+            if v.get('brand_model'):
+                base_brand = v.get('brand_model_brand') or v.get('brand') or car_label
+                car_label = f"{base_brand} {v.get('brand_model')}".strip()
+                car_conf = v.get('brand_model_confidence', car_conf)
+
             label = f"{car_label} ({car_conf:.0%})"
             
             text_bbox = draw.textbbox((x1, y1 - 18), label, font=font)

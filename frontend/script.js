@@ -483,9 +483,25 @@ function createVehicleCard(vehicle, idx) {
     if (vehicle.clip_brand) {
         brands.push({ label: 'CLIP', name: vehicle.clip_brand, conf: vehicle.clip_brand_confidence, cls: 'clip' });
     }
+    const hasScopedModel =
+        vehicle.model_source === 'brand_sub_classifier' ||
+        !!vehicle.brand_model;
+    const resolvedModel = hasScopedModel ? (vehicle.model || vehicle.brand_model) : null;
+    const resolvedModelConf = hasScopedModel
+        ? (vehicle.model_confidence ?? vehicle.brand_model_confidence)
+        : null;
+    const resolvedModelBrand = hasScopedModel
+        ? (vehicle.model_brand || vehicle.brand_model_brand)
+        : null;
+    if (resolvedModel) {
+        const modelLabel = resolvedModelBrand
+            ? `${resolvedModelBrand} ${resolvedModel}`
+            : resolvedModel;
+        brands.push({ label: 'Model', name: modelLabel, conf: resolvedModelConf, cls: 'model' });
+    }
     
     if (brands.length > 0) {
-        // Show the highest confidence brand as the main heading
+        // Show the highest-confidence answer across Brand / CLIP / Model.
         const best = brands.reduce((a, b) => (b.conf || 0) > (a.conf || 0) ? b : a);
         const bestConfPct = best.conf ? Math.round(best.conf * 100) : 0;
         html += `<div class="model-name">${escapeHtml(formatModelName(best.name))}</div>`;
@@ -508,6 +524,25 @@ function createVehicleCard(vehicle, idx) {
             `;
         });
         html += '</div>';
+
+        // Optional: show all sub-classifier matches (brand -> model) if available
+        const subMatches = vehicle.brand_subclassifier_results || [];
+        if (subMatches.length > 0) {
+            html += '<div class="submatches-title">Sub-classifier matches</div>';
+            html += '<div class="submatches-list">';
+            subMatches.forEach(s => {
+                const sBrand = s.brand || 'unknown';
+                const sModel = s.make_model || 'unknown';
+                const sConf = s.confidence != null ? ` ${Math.round(s.confidence * 100)}%` : '';
+                const sSource = s.source ? ` [${s.source}]` : '';
+                html += `
+                    <div class="submatch-item">
+                        ${escapeHtml(sBrand)}: ${escapeHtml(formatModelName(sModel))}${sConf}${escapeHtml(sSource)}
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
     } else {
         html += '<div class="model-name">Unknown</div>';
     }

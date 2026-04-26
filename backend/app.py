@@ -101,6 +101,16 @@ async def predict_image(file: UploadFile = File(...)):
         vehicles = []
         for v in result.get('vehicles', []):
             vehicle_clean = {k: val for k, val in v.items() if k != 'crop'}
+
+            # Keep an explicit third output named "model" for clients,
+            # but only when it comes from brand-specific sub-classifier routing.
+            if not vehicle_clean.get('model'):
+                if vehicle_clean.get('brand_model'):
+                    vehicle_clean['model'] = vehicle_clean.get('brand_model')
+                    vehicle_clean['model_confidence'] = vehicle_clean.get('brand_model_confidence')
+                    vehicle_clean['model_brand'] = vehicle_clean.get('brand_model_brand')
+                    vehicle_clean['model_source'] = 'brand_sub_classifier'
+
             plates_clean = []
             for p in vehicle_clean.get('plates', []):
                 plates_clean.append({k: val for k, val in p.items() if k != 'crop'})
