@@ -18,12 +18,107 @@ from PIL import Image, ImageDraw, ImageFont
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
+import torch
+from torchvision import transforms
+try:
+    import timm
+except ImportError:
+    timm = None
+
 from model.video_processor import VideoProcessor
 from model.detector import VehiclePlateDetector
 from model.car_classifier import CarClassifier
 from model.clip_brand_classifier import CLIPBrandClassifier
 from model.plate_ocr import PlateOCR
 from model.country_identifier import CountryIdentifier
+
+
+class BrandClassifierBest:
+    """
+    Brand classifier backed by brand_classifier_best.pth.
+
+    This checkpoint was saved as a raw timm EfficientNetV2-S model
+    (no nn.Sequential custom head), so it must be loaded differently
+    from the legacy CarClassifier weights.
+
+    Class names are read from data/test_cars.txt (sorted, one per line).
+    """
+
+    def __init__(self, weights_path, class_names_path, device=None):
+        if timm is None:
+            raise ImportError("timm is required. Install: pip install timm")
+
+        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Load class names (must be sorted — matches training order)
+        with open(class_names_path, 'r', encoding='utf-8') as f:
+            self.class_names = sorted([line.strip() for line in f if line.strip()])
+        self.num_classes = len(self.class_names)
+
+        # Build raw timm model (no custom Sequential head)
+        self.model = timm.create_model(
+            'tf_efficientnetv2_s',
+            num_classes=self.num_classes
+        )
+
+        # Load checkpoint
+        checkpoint = torch.load(weights_path, map_location='cpu')
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            self.model.load_state_dict(checkpoint)
+
+        self.model.to(self.device)
+        self.model.eval()
+
+        self.transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )
+        ])
+
+        print(f"BrandClassifierBest loaded ({self.num_classes} brands from test_cars.txt)")
+
+    def predict(self, image, top_k=5):
+        """
+        Predict brand from a cropped vehicle image.
+
+        Returns dict compatible with the existing pipeline result format:
+            'make_model': str  (best brand name)
+            'confidence': float
+            'top_k': list of {'make_model': str, 'confidence': float}
+        """
+        if isinstance(image, str):
+            image = Image.open(image).convert('RGB')
+        elif not isinstance(image, Image.Image):
+            image = Image.fromarray(image)
+        image = image.convert('RGB')
+
+        x = self.transform(image).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(x)
+            probs = torch.softmax(logits, dim=1)
+
+        top_probs, top_indices = probs.topk(min(top_k, self.num_classes), dim=1)
+
+        predictions = [
+            {
+                'make_model': self.class_names[idx.item()],
+                'confidence': round(prob.item(), 4)
+            }
+            for prob, idx in zip(top_probs[0], top_indices[0])
+        ]
+
+        best = predictions[0] if predictions else {'make_model': 'Unknown', 'confidence': 0.0}
+        return {
+            'make_model': best['make_model'],
+            'confidence': best['confidence'],
+            'top_k': predictions
+        }
 
 
 class VehicleRecognitionPipeline:
@@ -96,23 +191,24 @@ class VehicleRecognitionPipeline:
             device=device
         )
         
-        # Brand classifier (EfficientNet — primary brand prediction)
+        # Brand classifier (EfficientNetV2-S best checkpoint — uses test_cars.txt)
         self.brand_confidence_threshold = brand_confidence_threshold
-        brand_weights = os.path.join(PROJECT_ROOT, 'weights', 'brand_classifier_latest.pth')
-        brand_class_names = os.path.join(PROJECT_ROOT, 'data', 'vmmrdb_brand_classes.txt')
-        
+        brand_weights = os.path.join(PROJECT_ROOT, 'weights', 'brand_classifier_best.pth')
+        brand_class_names = os.path.join(PROJECT_ROOT, 'data', 'test_cars.txt')
+
         if os.path.exists(brand_weights) and os.path.exists(brand_class_names):
-            num_brands = sum(1 for line in open(brand_class_names, 'r', encoding='utf-8') if line.strip())
-            self.brand_classifier = CarClassifier(
-                weights_path=brand_weights,
-                class_names_path=brand_class_names,
-                num_classes=num_brands,
-                device=device
-            )
-            print(f"Brand classifier loaded ({num_brands} brands)")
+            try:
+                self.brand_classifier = BrandClassifierBest(
+                    weights_path=brand_weights,
+                    class_names_path=brand_class_names,
+                    device=device
+                )
+            except Exception as e:
+                self.brand_classifier = None
+                print(f"Brand classifier failed to load: {e}")
         else:
             self.brand_classifier = None
-            print("Brand classifier not available (no weights found)")
+            print("Brand classifier not available (brand_classifier_best.pth or test_cars.txt missing)")
         
         # CLIP zero-shot classifier (additional fallback for unknown brands)
         if clip_brand_list is None:
